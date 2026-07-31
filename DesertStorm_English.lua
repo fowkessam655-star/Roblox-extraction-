@@ -2079,109 +2079,8 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- ── AIMBOT ───────────────────────────────────────────────────
-    local aimActive = IsAimKeyDown()
-    if Settings.Aimbot_Enabled and aimActive and not ScreenGui.Enabled then
-        if CurrentTarget and IsVisible(CurrentTarget) then
-            local cf = CFrame.lookAt(camPos, CurrentTarget.Position)
-            Camera.CFrame = Camera.CFrame:Lerp(cf, Settings.Aim_Smoothness)
-        else
-            -- Find new target (raycast only when searching, not every frame while locked)
-            CurrentTarget = nil
-            local bestScore = math.huge
-            local rayParams = RaycastParams.new()
-            rayParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
-            rayParams.FilterType  = Enum.RaycastFilterType.Exclude
-            rayParams.IgnoreWater = true
-            for _, target in ipairs(targets) do
-                local show = (target.IsNPC and Settings.NPC_Enabled) or not target.IsNPC
-                if show then
-                    local model = target.Model
-
-                    -- Skip teammates
-                    if not target.IsNPC and IsSameTeam(model) then
-                        continue
-                    end
-
-                    local hum = model:FindFirstChildOfClass("Humanoid")
-                    if model and hum and hum.Health > 0 then
-                        local part = model:FindFirstChild(Settings.Aim_Part)
-                        if part then
-                            local partPos = part.Position
-                            local d = (camPos - partPos).Magnitude
-                            if d <= Settings.ESP_MaxDistance then
-                                local sp, onScreen = Camera:WorldToViewportPoint(partPos)
-                                if onScreen then
-                                    local sd = (Vector2.new(sp.X, sp.Y) - screenCenter).Magnitude
-                                    if sd < Settings.FOV_Radius then
-                                        local score = Settings.Aim_Priority == "Health"
-                                            and hum.Health
-                                            or  sd
-                                        if score < bestScore then
-                                            local ray = workspace:Raycast(camPos, partPos - camPos, rayParams)
-                                            if not ray or ray.Instance:IsDescendantOf(model) then
-                                                bestScore     = score
-                                                CurrentTarget = part
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-            if CurrentTarget then
-                local cf = CFrame.lookAt(camPos, CurrentTarget.Position)
-                Camera.CFrame = Camera.CFrame:Lerp(cf, Settings.Aim_Smoothness)
-            end
-        end
-    else
-        CurrentTarget = nil
-    end
-
-    -- ── NO RECOIL / NO SWAY ───────────────────────────────────────
-    -- No recoil: maintain our OWN pitch variable updated only from mouse Y.
-    --   Sensitivity is self-calibrated every frame by watching yaw change vs
-    --   mouse X delta (yaw = pure mouse, no gun ever adds yaw recoil).
-    --   Camera pitch is then forced to our value → recoil never lands.
-    -- No sway: force camera Z rotation to 0 every frame (removes weapon bob/tilt).
-    if Settings.NoRecoil or Settings.NoSway then
-        local mouseDelta       = UserInput:GetMouseDelta()
-        local currX, currY, currZ = Camera.CFrame:ToOrientation()
-
-        -- Self-calibrate: yaw only changes with mouse X, so
-        --   nrSensEst ≈ -yawDelta / mouseDelta.X
-        if nrPrevCF and math.abs(mouseDelta.X) > 0.8 then
-            local _, prevY, _ = nrPrevCF:ToOrientation()
-            local yawDelta    = currY - prevY
-            if math.abs(yawDelta) > 0.00005 then
-                local est = -yawDelta / mouseDelta.X
-                if est > 0.0003 and est < 0.03 then
-                    nrSensEst = nrSensEst * 0.88 + est * 0.12
-                end
-            end
-        end
-
-        if Settings.NoRecoil then
-            -- Initialise on first active frame
-            if nrPitch == nil then nrPitch = currX end
-            -- Advance only by mouse Y (converted with calibrated sensitivity)
-            nrPitch = math.clamp(nrPitch - mouseDelta.Y * nrSensEst, -1.45, 1.45)
-            local finalZ = Settings.NoSway and 0 or currZ
-            Camera.CFrame = CFrame.new(Camera.CFrame.Position)
-                          * CFrame.fromOrientation(nrPitch, currY, finalZ)
-        elseif Settings.NoSway then
-            -- Only sway removal — don't touch pitch
-            Camera.CFrame = CFrame.new(Camera.CFrame.Position)
-                          * CFrame.fromOrientation(currX, currY, 0)
-        end
-
-        nrPrevCF = Camera.CFrame
-    else
-        nrPitch  = nil
-        nrPrevCF = nil
-    end
+    -- Aimbot + no-recoil run in AuraCameraStep (BindToRenderStep Camera+1)
+    -- so they always overwrite the game's camera last. nothing here.
 
     -- ── CROSSHAIR ─────────────────────────────────────────────────
     if Settings.Crosshair_Enabled then
@@ -2305,6 +2204,149 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
 end)
 
 -- ============================================================
+-- CAMERA OVERRIDE STEP  (runs AFTER game camera at Camera+1 priority)
+-- Handles aimbot hard-lock and no-recoil/sway.
+-- Running after the game means our CFrame always wins — mouse input
+-- processed by the game camera script is overwritten every frame.
+-- ============================================================
+local _aimbotLocked = false  -- true while CameraType is Scriptable
+
+RunService:BindToRenderStep("AuraCameraStep", Enum.RenderPriority.Camera.Value + 1, function()
+    local camPos      = Camera.CFrame.Position
+    local vpX, vpY    = Camera.ViewportSize.X, Camera.ViewportSize.Y
+    local screenCenter= Vector2.new(vpX / 2, vpY / 2)
+
+    -- ── AIMBOT ───────────────────────────────────────────────────
+    local aimActive = IsAimKeyDown()
+    if Settings.Aimbot_Enabled and aimActive and not ScreenGui.Enabled then
+
+        -- Validate current target
+        if CurrentTarget and not IsVisible(CurrentTarget) then
+            CurrentTarget = nil
+        end
+
+        -- Search for new target if none locked
+        if not CurrentTarget then
+            local bestScore = math.huge
+            local rayParams = RaycastParams.new()
+            rayParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+            rayParams.FilterType  = Enum.RaycastFilterType.Exclude
+            rayParams.IgnoreWater = true
+
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LocalPlayer and plr.Character then
+                    local model = plr.Character
+                    if IsSameTeam(model) then continue end
+                    local hum  = model:FindFirstChildOfClass("Humanoid")
+                    local part = model:FindFirstChild(Settings.Aim_Part)
+                    if hum and hum.Health > 0 and part then
+                        local partPos    = part.Position
+                        local d          = (camPos - partPos).Magnitude
+                        local sp, onScreen = Camera:WorldToViewportPoint(partPos)
+                        if onScreen and d <= Settings.ESP_MaxDistance then
+                            local sd = (Vector2.new(sp.X, sp.Y) - screenCenter).Magnitude
+                            if sd < Settings.FOV_Radius then
+                                local score = Settings.Aim_Priority == "Health" and hum.Health or sd
+                                if score < bestScore then
+                                    local ray = workspace:Raycast(camPos, partPos - camPos, rayParams)
+                                    if not ray or ray.Instance:IsDescendantOf(model) then
+                                        bestScore     = score
+                                        CurrentTarget = part
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            -- Also scan NPCs
+            if Settings.NPC_Enabled then
+                for model in pairs(NPCTable) do
+                    if model and model.Parent then
+                        local hum  = model:FindFirstChildOfClass("Humanoid")
+                        local part = model:FindFirstChild(Settings.Aim_Part)
+                        if hum and hum.Health > 0 and part then
+                            local partPos    = part.Position
+                            local d          = (camPos - partPos).Magnitude
+                            local sp, onScreen = Camera:WorldToViewportPoint(partPos)
+                            if onScreen and d <= Settings.ESP_MaxDistance then
+                                local sd = (Vector2.new(sp.X, sp.Y) - screenCenter).Magnitude
+                                if sd < Settings.FOV_Radius then
+                                    local score = Settings.Aim_Priority == "Health"
+                                        and (hum and hum.Health or math.huge) or sd
+                                    if score < (math.huge) then
+                                        local rayParams2 = RaycastParams.new()
+                                        rayParams2.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+                                        rayParams2.FilterType  = Enum.RaycastFilterType.Exclude
+                                        rayParams2.IgnoreWater = true
+                                        local ray = workspace:Raycast(camPos, partPos - camPos, rayParams2)
+                                        if not ray or ray.Instance:IsDescendantOf(model) then
+                                            CurrentTarget = part
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if CurrentTarget then
+            -- Hard lock: set CameraType Scriptable so game stops processing mouse
+            Camera.CameraType = Enum.CameraType.Scriptable
+            _aimbotLocked = true
+            -- Force camera to look exactly at target — no lerp, pure lock
+            local targetPos = CurrentTarget.Position
+            Camera.CFrame   = CFrame.lookAt(camPos, targetPos)
+            return  -- skip no-recoil while locked, camera is fully ours
+        end
+    end
+
+    -- Release lock if aim key up / no target / aimbot off
+    if _aimbotLocked then
+        Camera.CameraType = Enum.CameraType.Custom
+        _aimbotLocked     = false
+        CurrentTarget     = nil
+        nrPitch           = nil  -- reset no-recoil pitch so it syncs from new camera angle
+    end
+
+    -- ── NO RECOIL / NO SWAY ──────────────────────────────────────
+    -- Same Camera+1 priority guarantees we overwrite the game's camera.
+    if Settings.NoRecoil or Settings.NoSway then
+        local mouseDelta          = UserInput:GetMouseDelta()
+        local currX, currY, currZ = Camera.CFrame:ToOrientation()
+
+        -- Self-calibrate sensitivity from yaw (yaw = pure mouse, no recoil)
+        if nrPrevCF and math.abs(mouseDelta.X) > 0.8 then
+            local _, prevY, _ = nrPrevCF:ToOrientation()
+            local yawDelta    = currY - prevY
+            if math.abs(yawDelta) > 0.00005 then
+                local est = -yawDelta / mouseDelta.X
+                if est > 0.0003 and est < 0.03 then
+                    nrSensEst = nrSensEst * 0.88 + est * 0.12
+                end
+            end
+        end
+
+        if Settings.NoRecoil then
+            if nrPitch == nil then nrPitch = currX end
+            nrPitch = math.clamp(nrPitch - mouseDelta.Y * nrSensEst, -1.45, 1.45)
+            local finalZ = Settings.NoSway and 0 or currZ
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position)
+                          * CFrame.fromOrientation(nrPitch, currY, finalZ)
+        elseif Settings.NoSway then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position)
+                          * CFrame.fromOrientation(currX, currY, 0)
+        end
+        nrPrevCF = Camera.CFrame
+    else
+        nrPitch  = nil
+        nrPrevCF = nil
+    end
+end)
+
+-- ============================================================
 -- MOUSE FREEDOM  — free cursor + kill camera rotation while menu open
 -- Forces MouseBehavior.Default every frame so the game can't
 -- override it back, which also stops the camera from rotating.
@@ -2391,6 +2433,14 @@ EjectAura = function()
         MainRenderConn:Disconnect()
         MainRenderConn = nil
     end
+
+    -- Kill camera override step + restore camera type
+    pcall(function() RunService:UnbindFromRenderStep("AuraCameraStep") end)
+    pcall(function()
+        if Camera.CameraType == Enum.CameraType.Scriptable then
+            Camera.CameraType = Enum.CameraType.Custom
+        end
+    end)
 
     -- Kill mouse lock loop
     if mouseLockConn then
