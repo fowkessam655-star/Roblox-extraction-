@@ -1121,13 +1121,17 @@ local mouseLockConn = nil
 
 local function ApplyMenuLock()
     if mouseLockConn then return end
-    -- Force Default every RenderStepped so the game's own scripts can't re-lock
     mouseLockConn = RunService.RenderStepped:Connect(function()
+        -- Force cursor visible + unlocked every frame so game scripts can't fight us
         if UserInput.MouseBehavior ~= Enum.MouseBehavior.Default then
             UserInput.MouseBehavior = Enum.MouseBehavior.Default
         end
+        if not UserInput.MouseIconEnabled then
+            UserInput.MouseIconEnabled = true
+        end
     end)
-    UserInput.MouseBehavior = Enum.MouseBehavior.Default
+    UserInput.MouseBehavior   = Enum.MouseBehavior.Default
+    UserInput.MouseIconEnabled = true
 end
 
 local function RemoveMenuLock()
@@ -1135,8 +1139,8 @@ local function RemoveMenuLock()
         mouseLockConn:Disconnect()
         mouseLockConn = nil
     end
-    -- Give control back to the game
-    UserInput.MouseBehavior = Enum.MouseBehavior.LockCenter
+    UserInput.MouseBehavior    = Enum.MouseBehavior.LockCenter
+    UserInput.MouseIconEnabled = false
 end
 
 -- ============================================================
