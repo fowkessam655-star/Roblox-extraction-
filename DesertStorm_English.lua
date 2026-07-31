@@ -315,7 +315,7 @@ local function CreateSection(parent, title)
     layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
     local pad = Instance.new("UIPadding", container)
-    pad.PaddingTop    = UDim.new(0, 8)
+    pad.PaddingTop    = UDim.new(0, 16)  -- verified from original: 1164-(556+592) = 16
     pad.PaddingBottom = UDim.new(0, 8)
 
     layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
@@ -384,8 +384,9 @@ local function CreateSlider(parent, label, min, max, default, callback)
     row.Size = UDim2.new(1, -24, 0, 36)
     row.BackgroundTransparency = 1
 
+    -- label: 0.5 width, 16px tall (verified from original: UDim2.new(0.5, 0, 0, 16))
     local labelText = Instance.new("TextLabel", row)
-    labelText.Size = UDim2.new(0.6, 0, 0, 16)
+    labelText.Size = UDim2.new(0.5, 0, 0, 16)
     labelText.Position = UDim2.new(0, 0, 0, 0)
     labelText.BackgroundTransparency = 1
     labelText.Text = label
@@ -394,9 +395,10 @@ local function CreateSlider(parent, label, min, max, default, callback)
     labelText.TextSize = 12
     labelText.TextXAlignment = Enum.TextXAlignment.Left
 
+    -- value: 0.5 width at X=0.5, right-aligned (verified)
     local valueText = Instance.new("TextLabel", row)
-    valueText.Size = UDim2.new(0.4, 0, 0, 16)
-    valueText.Position = UDim2.new(0.6, 0, 0, 0)
+    valueText.Size = UDim2.new(0.5, 0, 0, 16)
+    valueText.Position = UDim2.new(0.5, 0, 0, 0)
     valueText.BackgroundTransparency = 1
     valueText.Text = tostring(default)
     valueText.TextColor3 = Colors.Accent
@@ -404,9 +406,10 @@ local function CreateSlider(parent, label, min, max, default, callback)
     valueText.TextSize = 12
     valueText.TextXAlignment = Enum.TextXAlignment.Right
 
+    -- track: anchored to bottom of row (verified: UDim2.new(0,0,1,-10) in original)
     local track = Instance.new("TextButton", row)
     track.Size = UDim2.new(1, 0, 0, 8)
-    track.Position = UDim2.new(0, 0, 0, 22)
+    track.Position = UDim2.new(0, 0, 1, -10)
     track.BackgroundColor3 = Colors.BG4
     track.Text = ""
     track.AutoButtonColor = false
@@ -445,8 +448,9 @@ local function CreateDropdown(parent, label, options, defaultIndex, callback)
     row.Size = UDim2.new(1, -24, 0, 26)
     row.BackgroundTransparency = 1
 
+    -- label: 0.5 width full height (verified from original: UDim2.new(0.5, 0, 1, 0))
     local labelText = Instance.new("TextLabel", row)
-    labelText.Size = UDim2.new(0.55, 0, 1, 0)
+    labelText.Size = UDim2.new(0.5, 0, 1, 0)
     labelText.BackgroundTransparency = 1
     labelText.Text = label
     labelText.TextColor3 = Colors.Gray1
