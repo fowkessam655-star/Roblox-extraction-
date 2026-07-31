@@ -472,6 +472,7 @@ end
 local AimbotTab = CreateTab("Aimbot", "◎")
 local ESPTab    = CreateTab("ESP",    "◈")
 local ConfigTab = CreateTab("Config", "⚙")
+local DumpTab   = CreateTab("Dump",   "◉")
 
 -- Aimbot tab
 local aimbotSection = CreateSection(AimbotTab, "Normal Aimbot (Camera)")
@@ -779,6 +780,309 @@ RunService.RenderStepped:Connect(function()
     else
         CurrentTarget = nil
     end
+end)
+
+-- ============================================================
+-- OFFSET DUMPER TAB
+-- ============================================================
+local dumpSection = CreateSection(DumpTab, "Offset Dumper")
+
+-- Output box (scrolling frame with text)
+local dumpScrollFrame = Instance.new("ScrollingFrame", dumpSection)
+dumpScrollFrame.Size = UDim2.new(1, -12, 0, 280)
+dumpScrollFrame.BackgroundColor3 = Colors.BG0
+dumpScrollFrame.BorderSizePixel = 0
+dumpScrollFrame.ScrollBarThickness = 3
+dumpScrollFrame.ScrollBarImageColor3 = Colors.Accent
+dumpScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+Instance.new("UICorner", dumpScrollFrame).CornerRadius = UDim.new(0, 4)
+
+local dumpOutput = Instance.new("TextLabel", dumpScrollFrame)
+dumpOutput.Size = UDim2.new(1, -8, 0, 0)
+dumpOutput.Position = UDim2.new(0, 4, 0, 4)
+dumpOutput.BackgroundTransparency = 1
+dumpOutput.TextColor3 = Colors.Accent
+dumpOutput.Font = Enum.Font.Code
+dumpOutput.TextSize = 11
+dumpOutput.TextWrapped = true
+dumpOutput.TextXAlignment = Enum.TextXAlignment.Left
+dumpOutput.TextYAlignment = Enum.TextYAlignment.Top
+dumpOutput.AutomaticSize = Enum.AutomaticSize.Y
+dumpOutput.Text = "[ press DUMP to scan the game ]"
+
+-- Auto-resize scroll canvas when text changes
+dumpOutput:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+    dumpScrollFrame.CanvasSize = UDim2.new(0, 0, 0, dumpOutput.AbsoluteSize.Y + 8)
+end)
+
+-- Status label
+local dumpStatus = Instance.new("TextLabel", dumpSection)
+dumpStatus.Size = UDim2.new(1, -12, 0, 18)
+dumpStatus.BackgroundTransparency = 1
+dumpStatus.TextColor3 = Colors.Gray1
+dumpStatus.Font = Enum.Font.GothamBold
+dumpStatus.TextSize = 10
+dumpStatus.TextXAlignment = Enum.TextXAlignment.Left
+dumpStatus.Text = "status: idle"
+
+-- Button row
+local btnRow = Instance.new("Frame", dumpSection)
+btnRow.Size = UDim2.new(1, -12, 0, 28)
+btnRow.BackgroundTransparency = 1
+
+local btnLayout = Instance.new("UIListLayout", btnRow)
+btnLayout.FillDirection = Enum.FillDirection.Horizontal
+btnLayout.Padding = UDim.new(0, 8)
+
+local function MakeButton(parent, label, color, callback)
+    local btn = Instance.new("TextButton", parent)
+    btn.Size = UDim2.new(0, 100, 1, 0)
+    btn.BackgroundColor3 = color
+    btn.Text = label
+    btn.TextColor3 = Colors.BG0
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 11
+    btn.AutoButtonColor = false
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+-- ============================================================
+-- DUMP LOGIC
+-- ============================================================
+local function RunDump()
+    dumpStatus.Text = "status: scanning..."
+    dumpOutput.Text = ""
+    task.wait()
+
+    local lines = {}
+    local function add(s) table.insert(lines, s) end
+
+    -- ── GAME INFO ─────────────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  GAME INFO")
+    add("╠══════════════════════════════════════")
+    add("  PlaceId      : " .. tostring(game.PlaceId))
+    add("  GameId       : " .. tostring(game.GameId))
+    add("  PlaceVersion : " .. tostring(game.PlaceVersion))
+    add("  CreatorId    : " .. tostring(game.CreatorId))
+    add("  CreatorType  : " .. tostring(game.CreatorType))
+    add("  Name         : " .. tostring(game.Name))
+    add("")
+
+    -- ── LOCAL PLAYER ──────────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  LOCAL PLAYER")
+    add("╠══════════════════════════════════════")
+    add("  Name         : " .. LocalPlayer.Name)
+    add("  UserId       : " .. tostring(LocalPlayer.UserId))
+    add("  TeamColor    : " .. tostring(LocalPlayer.TeamColor))
+    add("  AccountAge   : " .. tostring(LocalPlayer.AccountAge))
+
+    local char = LocalPlayer.Character
+    if char then
+        local hum  = char:FindFirstChildOfClass("Humanoid")
+        local root = char:FindFirstChild("HumanoidRootPart")
+        add("")
+        add("  [ CHARACTER ]")
+        add("  Path         : workspace." .. char.Name)
+        if hum then
+            add("  Hum.Health       : " .. tostring(hum.Health))
+            add("  Hum.MaxHealth    : " .. tostring(hum.MaxHealth))
+            add("  Hum.WalkSpeed    : " .. tostring(hum.WalkSpeed))
+            add("  Hum.JumpPower    : " .. tostring(hum.JumpPower))
+            add("  Hum.JumpHeight   : " .. tostring(hum.JumpHeight))
+            add("  Hum.RigType      : " .. tostring(hum.RigType))
+            add("  Hum.DisplayName  : " .. tostring(hum.DisplayName))
+        end
+        if root then
+            add("  RootPart.Pos     : " .. tostring(root.Position))
+            add("  RootPart.Vel     : " .. tostring(root.AssemblyLinearVelocity))
+        end
+        add("")
+        add("  [ PARTS ]")
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                add("  " .. part.Name .. " @ " .. tostring(part.Position))
+            end
+        end
+    end
+    add("")
+
+    -- ── REMOTE EVENTS ─────────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  REMOTE EVENTS")
+    add("╠══════════════════════════════════════")
+    local remoteCount = 0
+    local function ScanRemotes(parent, path)
+        for _, obj in ipairs(parent:GetDescendants()) do
+            if obj:IsA("RemoteEvent") then
+                add("  [RE]  " .. path .. "." .. obj:GetFullName():gsub("^[^.]+%.", ""))
+                remoteCount = remoteCount + 1
+            elseif obj:IsA("RemoteFunction") then
+                add("  [RF]  " .. path .. "." .. obj:GetFullName():gsub("^[^.]+%.", ""))
+                remoteCount = remoteCount + 1
+            elseif obj:IsA("UnreliableRemoteEvent") then
+                add("  [URE] " .. path .. "." .. obj:GetFullName():gsub("^[^.]+%.", ""))
+                remoteCount = remoteCount + 1
+            end
+        end
+    end
+    local RS = game:GetService("ReplicatedStorage")
+    local RFS = pcall(function() return game:GetService("ReplicatedFirst") end) and game:GetService("ReplicatedFirst")
+    ScanRemotes(RS, "ReplicatedStorage")
+    if RFS then ScanRemotes(RFS, "ReplicatedFirst") end
+    ScanRemotes(workspace, "workspace")
+    add("  Total found: " .. remoteCount)
+    add("")
+
+    -- ── SCRIPTS ───────────────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  LOCAL SCRIPTS")
+    add("╠══════════════════════════════════════")
+    local scriptCount = 0
+    for _, obj in ipairs(LocalPlayer:GetDescendants()) do
+        if obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
+            local tag = obj:IsA("LocalScript") and "[LS]" or "[MOD]"
+            add("  " .. tag .. " " .. obj:GetFullName())
+            scriptCount = scriptCount + 1
+        end
+    end
+    if scriptCount == 0 then add("  none found") end
+    add("")
+
+    -- ── PLAYER GUIS ───────────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  PLAYER GUIS")
+    add("╠══════════════════════════════════════")
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then
+        for _, gui in ipairs(pg:GetChildren()) do
+            add("  " .. gui.ClassName .. " : " .. gui.Name)
+        end
+    end
+    add("")
+
+    -- ── TOOLS / WEAPONS ───────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  TOOLS / WEAPONS")
+    add("╠══════════════════════════════════════")
+    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local toolCount = 0
+    if bp then
+        for _, tool in ipairs(bp:GetChildren()) do
+            if tool:IsA("Tool") then
+                add("  [TOOL] " .. tool.Name)
+                for _, v in ipairs(tool:GetDescendants()) do
+                    if v:IsA("NumberValue") or v:IsA("IntValue") or v:IsA("StringValue") or v:IsA("BoolValue") then
+                        add("         ." .. v.Name .. " = " .. tostring(v.Value))
+                    end
+                    if v:IsA("Configuration") or v:IsA("ModuleScript") then
+                        add("         [" .. v.ClassName .. "] " .. v.Name)
+                    end
+                end
+                toolCount = toolCount + 1
+            end
+        end
+    end
+    if char then
+        for _, tool in ipairs(char:GetChildren()) do
+            if tool:IsA("Tool") then
+                add("  [EQUIPPED] " .. tool.Name)
+                for _, v in ipairs(tool:GetDescendants()) do
+                    if v:IsA("NumberValue") or v:IsA("IntValue") or v:IsA("StringValue") or v:IsA("BoolValue") then
+                        add("             ." .. v.Name .. " = " .. tostring(v.Value))
+                    end
+                end
+                toolCount = toolCount + 1
+            end
+        end
+    end
+    if toolCount == 0 then add("  none found") end
+    add("")
+
+    -- ── VALUE OBJECTS ─────────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  PLAYER VALUE OBJECTS (leaderstats etc)")
+    add("╠══════════════════════════════════════")
+    local function DumpValues(parent, indent)
+        for _, v in ipairs(parent:GetChildren()) do
+            if v:IsA("NumberValue") or v:IsA("IntValue") or v:IsA("StringValue")
+            or v:IsA("BoolValue") or v:IsA("Vector3Value") then
+                add(indent .. v.Name .. " [" .. v.ClassName .. "] = " .. tostring(v.Value))
+            elseif v:IsA("Folder") or v:IsA("Configuration") then
+                add(indent .. "[" .. v.ClassName .. "] " .. v.Name)
+                DumpValues(v, indent .. "  ")
+            end
+        end
+    end
+    DumpValues(LocalPlayer, "  ")
+    add("")
+
+    -- ── REPLICATED STORAGE ────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  REPLICATED STORAGE (top level)")
+    add("╠══════════════════════════════════════")
+    for _, obj in ipairs(RS:GetChildren()) do
+        add("  [" .. obj.ClassName .. "] " .. obj.Name)
+    end
+    add("")
+
+    -- ── WORKSPACE MODELS ──────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  WORKSPACE MODELS (top level)")
+    add("╠══════════════════════════════════════")
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("Model") and obj ~= LocalPlayer.Character then
+            local hum2 = obj:FindFirstChildOfClass("Humanoid")
+            local tag  = hum2 and "[NPC] " or "[MDL] "
+            add("  " .. tag .. obj.Name)
+        end
+    end
+    add("")
+
+    -- ── BINDABLE EVENTS ───────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  BINDABLE EVENTS / FUNCTIONS")
+    add("╠══════════════════════════════════════")
+    local bcount = 0
+    for _, obj in ipairs(RS:GetDescendants()) do
+        if obj:IsA("BindableEvent") or obj:IsA("BindableFunction") then
+            add("  [" .. obj.ClassName .. "] " .. obj:GetFullName())
+            bcount = bcount + 1
+        end
+    end
+    if bcount == 0 then add("  none found in ReplicatedStorage") end
+    add("")
+
+    -- ── CAMERA ────────────────────────────────────────────────
+    add("╔══════════════════════════════════════")
+    add("║  CAMERA")
+    add("╠══════════════════════════════════════")
+    add("  CameraType     : " .. tostring(Camera.CameraType))
+    add("  FieldOfView    : " .. tostring(Camera.FieldOfView))
+    add("  Position       : " .. tostring(Camera.CFrame.Position))
+    add("  ViewportSize   : " .. tostring(Camera.ViewportSize))
+    add("")
+
+    add("╔══════════════════════════════════════")
+    add("║  DUMP COMPLETE")
+    add("╚══════════════════════════════════════")
+
+    dumpOutput.Text = table.concat(lines, "\n")
+    dumpScrollFrame.CanvasSize = UDim2.new(0, 0, 0, dumpOutput.AbsoluteSize.Y + 8)
+    dumpStatus.Text = "status: done — " .. #lines .. " lines dumped"
+end
+
+MakeButton(btnRow, "▶  DUMP", Colors.Accent, function()
+    task.spawn(RunDump)
+end)
+
+MakeButton(btnRow, "✕  CLEAR", Colors.Gray2, function()
+    dumpOutput.Text = "[ press DUMP to scan the game ]"
+    dumpScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 60)
+    dumpStatus.Text = "status: idle"
 end)
 
 -- ============================================================
