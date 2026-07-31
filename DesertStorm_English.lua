@@ -923,6 +923,30 @@ MakeButton(btnRow, "✕  CLEAR", Colors.Gray2,  function()
 end)
 
 -- ============================================================
+-- DRAWING SUPPORT + DUMMY FALLBACK
+-- ============================================================
+local DrawingSupported = false
+pcall(function()
+    local t = typeof(Drawing)
+    DrawingSupported = (t == "table" or t == "userdata") and typeof(Drawing.new) == "function"
+end)
+
+local function NewDrawing(kind)
+    if DrawingSupported then
+        local ok, obj = pcall(Drawing.new, kind)
+        if ok then return obj end
+    end
+    local dummy = setmetatable({}, {
+        __index    = function(t, k) return rawget(t, k) end,
+        __newindex = function(t, k, v) rawset(t, k, v) end,
+    })
+    dummy.Visible = false
+    dummy.Remove  = function() end
+    dummy.Destroy = function() end
+    return dummy
+end
+
+-- ============================================================
 -- CROSSHAIR DRAWINGS
 -- ============================================================
 local CrosshairLines = {}
@@ -1033,31 +1057,6 @@ end)
 TabButtons["Aimbot"].BackgroundColor3 = Colors.BG3
 TabButtons["Aimbot"].TextColor3       = Colors.Green
 TabPages["Aimbot"].Visible            = true
-
--- ============================================================
--- DRAWING SUPPORT + DUMMY FALLBACK
--- ============================================================
-local DrawingSupported = false
-pcall(function()
-    local t = typeof(Drawing)
-    DrawingSupported = (t == "table" or t == "userdata") and typeof(Drawing.new) == "function"
-end)
-
-local function NewDrawing(kind)
-    if DrawingSupported then
-        local ok, obj = pcall(Drawing.new, kind)
-        if ok then return obj end
-    end
-    -- Dummy: silent no-op if Drawing unavailable
-    local dummy = setmetatable({}, {
-        __index    = function(t, k) return rawget(t, k) end,
-        __newindex = function(t, k, v) rawset(t, k, v) end,
-    })
-    dummy.Visible = false
-    dummy.Remove  = function() end
-    dummy.Destroy = function() end
-    return dummy
-end
 
 -- ============================================================
 -- ESP OBJECTS
