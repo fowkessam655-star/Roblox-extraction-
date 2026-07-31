@@ -233,7 +233,8 @@ local function CreateTab(tabId, icon)
     local btn = Instance.new("TextButton", TabScroll)
     btn.Size = UDim2.new(1, -16, 0, 32)
     btn.BackgroundColor3 = Colors.BG1
-    btn.Text = icon .. "  " .. tabId
+    -- original format: 3 spaces + icon + 2 spaces + name (verified from decoded strings)
+    btn.Text = "   " .. icon .. "  " .. tabId
     btn.TextColor3 = Colors.Gray1
     btn.Font = Enum.Font.GothamBold
     btn.TextSize = 12
