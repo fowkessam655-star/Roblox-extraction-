@@ -16,6 +16,7 @@ local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
 local UserInput    = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
+local Lighting     = game:GetService("Lighting")
 
 local Camera      = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
@@ -549,7 +550,6 @@ local infoText = Instance.new("TextLabel", infoSection)
 infoText.Size = UDim2.new(1, -12, 0, 60)
 infoText.BackgroundTransparency = 1
 infoText.TextColor3 = Colors.Gray1
--- translated from original Spanish info text
 infoText.Text =
     "[INSERT] or [RSHIFT] to hide the panel.\n" ..
     "[RIGHT CLICK] to activate Aimbot.\n" ..
@@ -558,6 +558,89 @@ infoText.Font = Enum.Font.Gotham
 infoText.TextSize = 11
 infoText.TextWrapped = true
 infoText.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Section: "Visuals"
+local visualSettingsSection = CreateSection(SettingsTab, "Visuals")
+
+-- ── FULLBRIGHT ───────────────────────────────────────────────
+-- Save original lighting values so we can restore on toggle off
+local OriginalLighting = {
+    Brightness      = Lighting.Brightness,
+    Ambient         = Lighting.Ambient,
+    OutdoorAmbient  = Lighting.OutdoorAmbient,
+    ClockTime       = Lighting.ClockTime,
+    GlobalShadows   = Lighting.GlobalShadows,
+    FogEnd          = Lighting.FogEnd,
+    FogStart        = Lighting.FogStart,
+}
+
+-- Save original post-effect states
+local OriginalEffects = {}
+for _, effect in ipairs(Lighting:GetChildren()) do
+    if effect:IsA("PostEffect") then
+        OriginalEffects[effect] = effect.Enabled
+    end
+end
+
+local fullbrightConn = nil
+
+local function SetFullbright(enabled)
+    if enabled then
+        -- Apply full brightness
+        Lighting.Brightness     = 2
+        Lighting.Ambient        = Color3.fromRGB(255, 255, 255)
+        Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+        Lighting.ClockTime      = 14   -- 2pm, peak daylight
+        Lighting.GlobalShadows  = false
+        Lighting.FogEnd         = 100000
+        Lighting.FogStart       = 100000
+        -- Disable all post-processing (bloom, blur, color correction etc)
+        for _, effect in ipairs(Lighting:GetChildren()) do
+            if effect:IsA("PostEffect") then
+                effect.Enabled = false
+            end
+        end
+        -- Enforce every frame so the game can't restore its own lighting
+        fullbrightConn = RunService.Heartbeat:Connect(function()
+            if Lighting.Brightness ~= 2 then
+                Lighting.Brightness = 2
+            end
+            if Lighting.Ambient ~= Color3.fromRGB(255, 255, 255) then
+                Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+            end
+            if Lighting.OutdoorAmbient ~= Color3.fromRGB(255, 255, 255) then
+                Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+            end
+            if Lighting.GlobalShadows then
+                Lighting.GlobalShadows = false
+            end
+        end)
+    else
+        -- Disconnect enforcer
+        if fullbrightConn then
+            fullbrightConn:Disconnect()
+            fullbrightConn = nil
+        end
+        -- Restore original lighting
+        Lighting.Brightness     = OriginalLighting.Brightness
+        Lighting.Ambient        = OriginalLighting.Ambient
+        Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+        Lighting.ClockTime      = OriginalLighting.ClockTime
+        Lighting.GlobalShadows  = OriginalLighting.GlobalShadows
+        Lighting.FogEnd         = OriginalLighting.FogEnd
+        Lighting.FogStart       = OriginalLighting.FogStart
+        -- Re-enable post effects
+        for effect, wasEnabled in pairs(OriginalEffects) do
+            if effect and effect.Parent then
+                effect.Enabled = wasEnabled
+            end
+        end
+    end
+end
+
+CreateToggle(visualSettingsSection, "Full Bright", false, function(v)
+    SetFullbright(v)
+end)
 
 -- ── DUMP TAB ────────────────────────────────────────────────
 local dumpSection = CreateSection(DumpTab, "Offset Dumper")
