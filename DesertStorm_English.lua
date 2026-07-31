@@ -1073,7 +1073,7 @@ dangerInfo.Font               = Enum.Font.Gotham
 dangerInfo.TextSize           = 11
 dangerInfo.TextXAlignment     = Enum.TextXAlignment.Left
 dangerInfo.TextWrapped        = true
-dangerInfo.Text               = "Eject unloads Aura completely. Reinject mid-match is safe.\nKeybind: [DELETE]"
+dangerInfo.Text               = "Eject unloads Aura completely. Reinject mid-match is safe."
 local ejectBtn = CreateButton(dangerSection, "⏏  EJECT AURA", Color3.fromRGB(180, 40, 40), function() end)
 
 -- ── DUMP TAB ────────────────────────────────────────────────
@@ -2119,10 +2119,6 @@ UserInput.InputBegan:Connect(function(input, _gameProcessed)
     -- Force extract keybind [END]
     if input.KeyCode == Enum.KeyCode.End then
         ForceExtract()
-    end
-    -- Eject keybind [DELETE]
-    if input.KeyCode == Enum.KeyCode.Delete then
-        EjectAura()
     end
 end)
 
