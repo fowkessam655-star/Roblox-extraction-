@@ -1117,30 +1117,42 @@ end)
 -- override it back, which also stops the camera from rotating.
 -- No inputs are sunk so shooting still works normally.
 -- ============================================================
+-- Custom GUI cursor — completely bypasses the game's cursor control.
+-- An ImageLabel that follows mouse position every frame.
+-- No more fighting with MouseIconEnabled.
+local CustomCursor = Instance.new("ImageLabel", ScreenGui)
+CustomCursor.Name             = "AuraCursor"
+CustomCursor.Size             = UDim2.new(0, 18, 0, 18)
+CustomCursor.BackgroundTransparency = 1
+CustomCursor.Image            = "rbxasset://textures/Cursors/KeyboardMouse/ArrowCursor.png"
+CustomCursor.ZIndex           = 999
+CustomCursor.Visible          = false
+CustomCursor.AnchorPoint      = Vector2.new(0, 0)
+
 local mouseLockConn = nil
 
 local function ApplyMenuLock()
     if mouseLockConn then return end
+    CustomCursor.Visible = true
     mouseLockConn = RunService.RenderStepped:Connect(function()
-        -- Force cursor visible + unlocked every frame so game scripts can't fight us
+        -- Freeze camera: force Default mouse behavior every frame
         if UserInput.MouseBehavior ~= Enum.MouseBehavior.Default then
             UserInput.MouseBehavior = Enum.MouseBehavior.Default
         end
-        if not UserInput.MouseIconEnabled then
-            UserInput.MouseIconEnabled = true
-        end
+        -- Move our custom cursor to wherever the real mouse is
+        local mousePos = UserInput:GetMouseLocation()
+        CustomCursor.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y)
     end)
-    UserInput.MouseBehavior   = Enum.MouseBehavior.Default
-    UserInput.MouseIconEnabled = true
+    UserInput.MouseBehavior = Enum.MouseBehavior.Default
 end
 
 local function RemoveMenuLock()
+    CustomCursor.Visible = false
     if mouseLockConn then
         mouseLockConn:Disconnect()
         mouseLockConn = nil
     end
-    UserInput.MouseBehavior    = Enum.MouseBehavior.LockCenter
-    UserInput.MouseIconEnabled = false
+    UserInput.MouseBehavior = Enum.MouseBehavior.LockCenter
 end
 
 -- ============================================================
