@@ -768,21 +768,6 @@ local leaveBtn     = CreateButton(extractSection, "✕  LEAVE SERVER",  Color3.f
 --   2. Fire any RemoteEvent anywhere in the game tree that looks like extraction
 --   3. TeleportService rejoin
 --   4. Kick fallback
-local EXTRACT_PATTERNS = {
-    -- Desert Storm specific (from screenshot UI labels)
-    "southern", "tunnel", "mountain", "cave", "western", "boat", "northern",
-    -- Generic extraction names any game might use
-    "extract", "exfil", "exzone", "exitzone", "escapezon", "exit", "evac",
-}
-
-local function MatchesExtract(name)
-    local n = name:lower()
-    for _, pat in ipairs(EXTRACT_PATTERNS) do
-        if n:find(pat, 1, true) then return true end
-    end
-    return false
-end
-
 local function ForceExtract()
     extractBtn.Text    = "searching..."
     extractStatus.Text = ""
@@ -794,83 +779,116 @@ local function ForceExtract()
         return
     end
 
-    -- ── STEP 1: find closest matching Part or Model, teleport in, trigger prompts ──
-    local bestObj  = nil
-    local bestDist = math.huge
-    local bestPos  = nil
+    -- ── STEP 1: find ProximityPrompts whose ActionText/ObjectText looks like extraction ──
+    -- The zone Parts in workspace probably aren't named "tunnel"/"cave" etc.
+    -- but the ProximityPrompts ON them will have readable text.
+    local promptKeywords = {"extract", "exfil", "exit", "escape", "evac", "leave", "exfiltrate"}
+    local bestPrompt = nil
+    local bestDist   = math.huge
 
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        -- match on the object itself OR its parent Model name
-        local nameMatch = MatchesExtract(obj.Name)
-            or (obj.Parent and obj.Parent:IsA("Model") and MatchesExtract(obj.Parent.Name))
-
-        if nameMatch and (obj:IsA("BasePart") or obj:IsA("MeshPart") or obj:IsA("UnionOperation")) then
-            local d = (root.Position - obj.Position).Magnitude
-            if d < bestDist then
-                bestDist = d
-                bestObj  = obj
-                bestPos  = obj.Position
-            end
-        end
-    end
-
-    if bestObj then
-        -- Teleport into zone centre, slightly above so physics settle
-        root.CFrame = CFrame.new(bestPos + Vector3.new(0, 4, 0))
-        extractStatus.Text = "teleported → " .. bestObj.Name .. " (" .. math.floor(bestDist) .. "m)"
-        task.wait(0.15)
-
-        -- Trigger every ProximityPrompt inside this zone or its parent Model
-        -- This bypasses the hold-E timer the game requires
-        local searchRoot = bestObj.Parent and bestObj.Parent:IsA("Model")
-            and bestObj.Parent or bestObj
-        for _, child in ipairs(searchRoot:GetDescendants()) do
-            if child:IsA("ProximityPrompt") then
-                pcall(function() child:InputHoldBegin() end)
-                task.wait(0.05)
-                pcall(function() child:InputHoldEnd() end)
-                -- Also try direct trigger (works on some executors)
-                pcall(function()
-                    game:GetService("ProximityPromptService"):PromptTriggered(child, LocalPlayer)
-                end)
-                extractStatus.Text = extractStatus.Text .. "\n→ triggered prompt: " .. child.ActionText
-            end
-        end
-
-        extractBtn.Text = "▶  FORCE EXTRACT"
-        return
-    end
-
-    -- ── STEP 2: fire any extraction RemoteEvent across the whole game tree ──
-    extractStatus.Text = "no zone found — scanning remotes..."
-    local fired   = false
-    local RS      = game:GetService("ReplicatedStorage")
-    local RF      = game:GetService("ReplicatedFirst")
-    local trees   = {RS, RF, workspace}
-    for _, tree in ipairs(trees) do
-        pcall(function()
-            for _, obj in ipairs(tree:GetDescendants()) do
-                if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                    if MatchesExtract(obj.Name) then
-                        if obj:IsA("RemoteEvent") then
-                            pcall(function() obj:FireServer() end)
-                        else
-                            pcall(function() obj:InvokeServer() end)
+    for _, pp in ipairs(workspace:GetDescendants()) do
+        if pp:IsA("ProximityPrompt") then
+            local combined = (pp.ActionText .. " " .. pp.ObjectText):lower()
+            for _, kw in ipairs(promptKeywords) do
+                if combined:find(kw, 1, true) then
+                    local anchor = pp.Parent
+                    if anchor and anchor:IsA("BasePart") then
+                        local d = (root.Position - anchor.Position).Magnitude
+                        if d < bestDist then
+                            bestDist   = d
+                            bestPrompt = pp
                         end
-                        extractStatus.Text = "fired remote: " .. obj:GetFullName()
-                        fired = true
                     end
+                    break
                 end
             end
-        end)
+        end
     end
-    if fired then
+
+    if bestPrompt then
+        local anchor = bestPrompt.Parent
+        -- Teleport into the zone first so server position checks pass
+        root.CFrame = anchor.CFrame + Vector3.new(0, 4, 0)
+        extractStatus.Text = "found prompt: \"" .. bestPrompt.ActionText .. "\" (" .. math.floor(bestDist) .. "m)"
+        task.wait(0.25)
+        -- Fire hold begin/end — skips the hold timer entirely
+        pcall(function() bestPrompt:InputHoldBegin() end)
+        task.wait(0.05)
+        pcall(function() bestPrompt:InputHoldEnd() end)
         extractBtn.Text = "▶  FORCE EXTRACT"
         return
     end
 
-    -- ── STEP 3: TeleportService rejoin ──
-    extractStatus.Text = "no remotes found — rejoining..."
+    -- ── STEP 2: scan BillboardGuis — extract zones usually have floating labels ──
+    local zoneKeywords = {"extract", "exfil", "tunnel", "cave", "boat", "mountain",
+                          "southern", "western", "northern", "zone", "evac", "exit"}
+    local bestBB   = nil
+    bestDist = math.huge
+
+    for _, bb in ipairs(workspace:GetDescendants()) do
+        if bb:IsA("BillboardGui") then
+            local text = ""
+            for _, child in ipairs(bb:GetDescendants()) do
+                if child:IsA("TextLabel") then text = text .. child.Text:lower() .. " " end
+            end
+            for _, kw in ipairs(zoneKeywords) do
+                if text:find(kw, 1, true) then
+                    local adornee = bb.Adornee or (bb.Parent and bb.Parent:IsA("BasePart") and bb.Parent)
+                    if adornee and adornee:IsA("BasePart") then
+                        local d = (root.Position - adornee.Position).Magnitude
+                        if d < bestDist then
+                            bestDist = d
+                            bestBB   = adornee
+                        end
+                    end
+                    break
+                end
+            end
+        end
+    end
+
+    if bestBB then
+        root.CFrame = bestBB.CFrame + Vector3.new(0, 4, 0)
+        extractStatus.Text = "teleported to labeled zone (" .. math.floor(bestDist) .. "m)"
+        task.wait(0.2)
+        for _, pp in ipairs(bestBB:GetDescendants()) do
+            if pp:IsA("ProximityPrompt") then
+                pcall(function() pp:InputHoldBegin() end)
+                task.wait(0.05)
+                pcall(function() pp:InputHoldEnd() end)
+            end
+        end
+        extractBtn.Text = "▶  FORCE EXTRACT"
+        return
+    end
+
+    -- ── STEP 3: fire RemoteEvents — broad keyword list ──
+    extractStatus.Text = "no zone/prompt found — scanning remotes..."
+    local remoteKeywords = {"extract", "exfil", "exit", "escape", "evac",
+                            "zone", "complete", "finish", "success", "leave"}
+    local RS    = game:GetService("ReplicatedStorage")
+    local fired = false
+    for _, obj in ipairs(RS:GetDescendants()) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+            local n = obj.Name:lower()
+            for _, kw in ipairs(remoteKeywords) do
+                if n:find(kw, 1, true) then
+                    if obj:IsA("RemoteEvent") then
+                        pcall(function() obj:FireServer() end)
+                    else
+                        pcall(function() obj:InvokeServer() end)
+                    end
+                    extractStatus.Text = "fired: " .. obj:GetFullName()
+                    fired = true
+                    break
+                end
+            end
+        end
+    end
+    if fired then extractBtn.Text = "▶  FORCE EXTRACT" return end
+
+    -- ── STEP 4: rejoin ──
+    extractStatus.Text = "nothing found — rejoining server..."
     extractBtn.Text    = "rejoining..."
     local ok = pcall(function()
         game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer)
