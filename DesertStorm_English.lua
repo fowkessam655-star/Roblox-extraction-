@@ -1112,47 +1112,32 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ============================================================
--- MOUSE LOCK  — freeze cursor + block camera when menu is open
+-- MOUSE FREEDOM  — free cursor + kill camera rotation while menu open
+-- Forces MouseBehavior.Default every frame so the game can't
+-- override it back, which also stops the camera from rotating.
+-- No inputs are sunk so shooting still works normally.
 -- ============================================================
-local ContextAction   = game:GetService("ContextActionService")
-local MouseLockActive = false
-
--- Saves whatever the game was using so we can restore it on close
-local function GetGameMouseBehavior()
-    -- Most shooters use LockCenter; fall back to Default if not
-    local ok, mb = pcall(function() return UserInput.MouseBehavior end)
-    return (ok and mb) or Enum.MouseBehavior.Default
-end
-
-local OriginalMouseBehavior = GetGameMouseBehavior()
+local mouseLockConn = nil
 
 local function ApplyMenuLock()
-    if MouseLockActive then return end
-    MouseLockActive = true
-    -- Free the cursor so the user can click menu elements
+    if mouseLockConn then return end
+    -- Force Default every RenderStepped so the game's own scripts can't re-lock
+    mouseLockConn = RunService.RenderStepped:Connect(function()
+        if UserInput.MouseBehavior ~= Enum.MouseBehavior.Default then
+            UserInput.MouseBehavior = Enum.MouseBehavior.Default
+        end
+    end)
     UserInput.MouseBehavior = Enum.MouseBehavior.Default
-    -- Sink all camera-control inputs so the game never sees them
-    ContextAction:BindActionAtPriority(
-        "AuraMenuLock",
-        function() return Enum.ContextActionResult.Sink end,
-        false,
-        Enum.ContextActionPriority.High.Value + 1,
-        Enum.UserInputType.MouseMovement,
-        Enum.UserInputType.MouseButton2,  -- blocks RMB (aimbot)
-        Enum.UserInputType.Touch
-    )
 end
 
 local function RemoveMenuLock()
-    if not MouseLockActive then return end
-    MouseLockActive = false
-    ContextAction:UnbindAction("AuraMenuLock")
-    -- Restore the game's original mouse behavior
+    if mouseLockConn then
+        mouseLockConn:Disconnect()
+        mouseLockConn = nil
+    end
+    -- Give control back to the game
     UserInput.MouseBehavior = Enum.MouseBehavior.LockCenter
 end
-
--- Apply lock immediately if menu starts visible
-if ScreenGui.Enabled then ApplyMenuLock() end
 
 -- ============================================================
 -- TOGGLE GUI  [INSERT] or [RSHIFT]  (verified from original info text)
