@@ -60,6 +60,8 @@ local Settings = {
     Aim_Priority    = "FOV",
     NoRecoil        = false,
     NoSway          = false,
+    SpeedHack       = false,
+    SpeedValue      = 50,
     -- esp
     ESP_Enabled     = false,
     NPC_Enabled     = false,
@@ -843,6 +845,18 @@ for _, effect in ipairs(Lighting:GetChildren()) do
 end
 
 local fullbrightConn = nil
+local speedHackConn  = nil
+
+-- Speed hack enforcer — runs every Heartbeat and keeps WalkSpeed set
+-- since most games reset it via their own Heartbeat/Stepped loop.
+speedHackConn = RunService.Heartbeat:Connect(function()
+    if not Settings.SpeedHack then return end
+    local char = LocalPlayer.Character
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if hum and hum.WalkSpeed ~= Settings.SpeedValue then
+        hum.WalkSpeed = Settings.SpeedValue
+    end
+end)
 
 local function SetFullbright(enabled)
     if enabled then
@@ -900,6 +914,21 @@ end
 
 CreateToggle(visualSettingsSection, "Full Bright", false, function(v)
     SetFullbright(v)
+end)
+
+-- ── MOVEMENT ─────────────────────────────────────────────────
+local movementSection = CreateSection(SettingsTab, "Movement")
+CreateToggle(movementSection, "Speed Hack", Settings.SpeedHack, function(v)
+    Settings.SpeedHack = v
+    if not v then
+        -- Restore default speed on toggle off
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.WalkSpeed = 16 end
+    end
+end)
+CreateSlider(movementSection, "Speed", 16, 250, Settings.SpeedValue, function(v)
+    Settings.SpeedValue = v
 end)
 
 -- ── FORCE EXTRACT ────────────────────────────────────────────
@@ -1090,6 +1119,7 @@ local CFG_KEYS = {
     "ESP_MaxDistance","HealthBar","Tracer","WeaponLabel",
     "Loot_Enabled","Best_Loot_Only","Radar_Enabled",
     "Crosshair_Enabled","Crosshair_Style",
+    "SpeedHack","SpeedValue",
 }
 
 local function CfgSave(name)
@@ -2438,6 +2468,17 @@ EjectAura = function()
         fullbrightConn:Disconnect()
         fullbrightConn = nil
     end
+
+    -- Kill speed hack enforcer + restore default speed
+    if speedHackConn then
+        speedHackConn:Disconnect()
+        speedHackConn = nil
+    end
+    pcall(function()
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.WalkSpeed = 16 end
+    end)
 
     -- Restore mouse + lighting
     pcall(function() UserInput.MouseBehavior = Enum.MouseBehavior.LockCenter end)
