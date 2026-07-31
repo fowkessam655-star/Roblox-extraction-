@@ -1054,6 +1054,19 @@ leaveBtn.MouseButton1Click:Connect(function()
     LocalPlayer:Kick("[Aura] Left Server")
 end)
 
+-- ── DANGER ZONE (eject) ──────────────────────────────────────
+local dangerSection = CreateSection(SettingsTab, "Danger Zone")
+local dangerInfo = Instance.new("TextLabel", dangerSection)
+dangerInfo.Size               = UDim2.new(1, -12, 0, 28)
+dangerInfo.BackgroundTransparency = 1
+dangerInfo.TextColor3         = Colors.Gray1
+dangerInfo.Font               = Enum.Font.Gotham
+dangerInfo.TextSize           = 11
+dangerInfo.TextXAlignment     = Enum.TextXAlignment.Left
+dangerInfo.TextWrapped        = true
+dangerInfo.Text               = "Eject unloads Aura completely. Reinject mid-match is safe.\nKeybind: [DELETE]"
+local ejectBtn = CreateButton(dangerSection, "⏏  EJECT AURA", Color3.fromRGB(180, 40, 40), function() end)
+
 -- ── DUMP TAB ────────────────────────────────────────────────
 local dumpSection = CreateSection(DumpTab, "Offset Dumper")
 
@@ -1552,8 +1565,16 @@ local nrPrevCF = nil   -- previous-frame CFrame for no-recoil delta
 -- RENDER LOOP
 -- ============================================================
 local CurrentTarget = nil
+local EjectAura     = nil  -- forward declaration; defined after all GUI is built
 
-RunService.RenderStepped:Connect(function()
+-- Frame throttle counters
+local _frame        = 0
+local _raycastCache = {}   -- [model] = cached color from last raycast tick
+local _lootFrame    = 0
+
+local MainRenderConn = nil
+MainRenderConn = RunService.RenderStepped:Connect(function()
+    _frame = _frame + 1
 
     -- FOV circle
     if Settings.Aimbot_Enabled then
@@ -1564,30 +1585,37 @@ RunService.RenderStepped:Connect(function()
         FOVCircle.Visible = false
     end
 
-    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    local cx = screenCenter.X
-    local cy = screenCenter.Y
+    local vpX          = Camera.ViewportSize.X
+    local vpY          = Camera.ViewportSize.Y
+    local screenCenter = Vector2.new(vpX / 2, vpY / 2)
+    local cx           = screenCenter.X
+    local cy           = screenCenter.Y
+    local camPos       = Camera.CFrame.Position
 
-    -- Build target list
+    -- Build target list (only when something actually needs it)
+    local needTargets  = Settings.ESP_Enabled or Settings.NPC_Enabled
+                      or Settings.Aimbot_Enabled or Settings.Radar_Enabled
     local targets = {}
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character then
-            table.insert(targets, {
-                Model = plr.Character,
-                IsNPC = false,
-                Name  = plr.Name,
-            })
+    if needTargets then
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then
+                table.insert(targets, {
+                    Model = plr.Character,
+                    IsNPC = false,
+                    Name  = plr.Name,
+                })
+            end
         end
-    end
-    for model in pairs(NPCTable) do
-        if model and model.Parent then
-            table.insert(targets, {
-                Model = model,
-                IsNPC = true,
-                Name  = "[NPC] " .. model.Name,
-            })
-        else
-            NPCTable[model] = nil
+        for model in pairs(NPCTable) do
+            if model and model.Parent then
+                table.insert(targets, {
+                    Model = model,
+                    IsNPC = true,
+                    Name  = "[NPC] " .. model.Name,
+                })
+            else
+                NPCTable[model] = nil
+            end
         end
     end
 
@@ -1602,34 +1630,46 @@ RunService.RenderStepped:Connect(function()
             for _, bone in ipairs(entry.Skeleton) do pcall(function() bone:Remove() end) end
             if entry.Highlight.Parent then pcall(function() entry.Highlight:Destroy() end) end
             ESPObjects[model] = nil
+            _raycastCache[model] = nil
         end
     end
 
     -- ── ESP RENDER ───────────────────────────────────────────────
+    -- Raycast color update: every 6 frames (10fps at 60fps) — cached otherwise
+    local doRaycast = (_frame % 6 == 0)
+
     for _, target in ipairs(targets) do
         local model = target.Model
-        local hum   = model:FindFirstChildOfClass("Humanoid")
-        local root  = model:FindFirstChild("HumanoidRootPart")
         local entry = ESPObjects[model] or CreateESPEntry(model)
 
         local shouldShow = (target.IsNPC and Settings.NPC_Enabled)
                         or (not target.IsNPC and Settings.ESP_Enabled)
 
-        if shouldShow and hum and hum.Health > 0 and root then
-            local head      = model:FindFirstChild("Head")
-            local screenPos, onScreen = Camera:WorldToViewportPoint(root.Position)
-            local dist      = (Camera.CFrame.Position - root.Position).Magnitude
+        -- Cache humanoid/root lookups per entry
+        if not entry._hum  then entry._hum  = model:FindFirstChildOfClass("Humanoid") end
+        if not entry._root then entry._root = model:FindFirstChild("HumanoidRootPart") end
+        if not entry._head then entry._head = model:FindFirstChild("Head") end
+        local hum  = entry._hum
+        local root = entry._root
+        local head = entry._head
 
-            -- Color: Green=teammate, Red=can shoot, Yellow=blocked, Orange=NPC
+        if shouldShow and hum and hum.Health > 0 and root then
+            local rootPos          = root.Position
+            local screenPos, onScreen = Camera:WorldToViewportPoint(rootPos)
+            local dist             = (camPos - rootPos).Magnitude
+
+            -- Color: throttled raycast
             local color
             if target.IsNPC then
                 color = Colors.Orange
+                _raycastCache[model] = color
             else
-                local plr       = Players:GetPlayerFromCharacter(model)
+                local plr        = Players:GetPlayerFromCharacter(model)
                 local isTeammate = plr and LocalPlayer.Team and plr.Team == LocalPlayer.Team
                 if isTeammate then
                     color = Color3.fromRGB(0, 220, 80)
-                else
+                    _raycastCache[model] = color
+                elseif doRaycast or not _raycastCache[model] then
                     local aimPart = model:FindFirstChild(Settings.Aim_Part) or head or root
                     local canShoot = false
                     if aimPart then
@@ -1638,8 +1678,8 @@ RunService.RenderStepped:Connect(function()
                         params.FilterType  = Enum.RaycastFilterType.Exclude
                         params.IgnoreWater = true
                         local ray = workspace:Raycast(
-                            Camera.CFrame.Position,
-                            aimPart.Position - Camera.CFrame.Position,
+                            camPos,
+                            aimPart.Position - camPos,
                             params
                         )
                         canShoot = not ray or ray.Instance:IsDescendantOf(model)
@@ -1647,6 +1687,9 @@ RunService.RenderStepped:Connect(function()
                     color = canShoot
                         and Color3.fromRGB(255, 50,  50)
                         or  Color3.fromRGB(255, 200, 0)
+                    _raycastCache[model] = color
+                else
+                    color = _raycastCache[model]
                 end
             end
 
@@ -1657,10 +1700,9 @@ RunService.RenderStepped:Connect(function()
                 entry.Highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
                 for _, bone in ipairs(entry.Skeleton) do bone.Color = color end
 
-                -- Box geometry (shared by health bar + tracer)
-                local boxHeight = 0
-                local boxTopY   = screenPos.Y
-                local rootScreen = Camera:WorldToViewportPoint(root.Position)
+                local boxHeight  = 0
+                local boxTopY    = screenPos.Y
+                local rootScreen = screenPos  -- already have it from WorldToViewportPoint above
 
                 if Settings.ESP_Type == "Full" then
                     entry.Box.Visible       = false
@@ -1670,7 +1712,7 @@ RunService.RenderStepped:Connect(function()
                     if entry.Highlight.Parent then entry.Highlight.Parent = nil end
                     if head then
                         local topPos    = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-                        local bottomPos = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+                        local bottomPos = Camera:WorldToViewportPoint(rootPos - Vector3.new(0, 3, 0))
                         boxHeight = math.abs(topPos.Y - bottomPos.Y)
                         local boxWidth = boxHeight * 0.6
                         boxTopY = topPos.Y
@@ -1680,7 +1722,7 @@ RunService.RenderStepped:Connect(function()
                     end
                 end
 
-                -- Health bar (left of box, green→red)
+                -- Health bar
                 if Settings.HealthBar and boxHeight > 0 then
                     local hp    = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
                     local barX  = entry.Box.Position.X - 5
@@ -1702,9 +1744,9 @@ RunService.RenderStepped:Connect(function()
                     entry.HealthBarFill.Visible = false
                 end
 
-                -- Tracer (line from screen bottom-center to player feet)
+                -- Tracer
                 if Settings.Tracer then
-                    entry.Tracer.From    = Vector2.new(cx, Camera.ViewportSize.Y)
+                    entry.Tracer.From    = Vector2.new(cx, vpY)
                     entry.Tracer.To      = Vector2.new(rootScreen.X, rootScreen.Y)
                     entry.Tracer.Color   = color
                     entry.Tracer.Visible = true
@@ -1712,14 +1754,16 @@ RunService.RenderStepped:Connect(function()
                     entry.Tracer.Visible = false
                 end
 
-                -- Name + distance + weapon label
+                -- Name + distance + weapon label (text changes slow, throttle to every 6 frames)
                 if Settings.ESP_ShowInfo then
-                    local weaponTag = ""
-                    if Settings.WeaponLabel then
-                        local tool = model:FindFirstChildOfClass("Tool")
-                        if tool then weaponTag = "\n[" .. tool.Name .. "]" end
+                    if doRaycast then  -- reuse the same throttle cadence
+                        local weaponTag = ""
+                        if Settings.WeaponLabel then
+                            local tool = model:FindFirstChildOfClass("Tool")
+                            if tool then weaponTag = "\n[" .. tool.Name .. "]" end
+                        end
+                        entry.Text.Text = string.format("%s  %dm%s", target.Name, math.floor(dist), weaponTag)
                     end
-                    entry.Text.Text     = string.format("%s  %dm%s", target.Name, math.floor(dist), weaponTag)
                     entry.Text.Position = Vector2.new(rootScreen.X, boxTopY + boxHeight + 4)
                     entry.Text.Visible  = true
                 else
@@ -1728,8 +1772,10 @@ RunService.RenderStepped:Connect(function()
 
                 -- Skeleton
                 if Settings.ESP_Skeleton then
-                    local isR15 = model:FindFirstChild("UpperTorso") ~= nil
-                    local bones = isR15 and R15Bones or R6Bones
+                    if not entry._isR15 then
+                        entry._isR15 = model:FindFirstChild("UpperTorso") ~= nil
+                    end
+                    local bones = entry._isR15 and R15Bones or R6Bones
                     for i = 1, math.min(#entry.Skeleton, #bones) do
                         local bone  = entry.Skeleton[i]
                         local partA = model:FindFirstChild(bones[i][1])
@@ -1763,11 +1809,16 @@ RunService.RenderStepped:Connect(function()
     local aimActive = IsAimKeyDown()
     if Settings.Aimbot_Enabled and aimActive and not ScreenGui.Enabled then
         if CurrentTarget and IsVisible(CurrentTarget) then
-            local cf = CFrame.lookAt(Camera.CFrame.Position, CurrentTarget.Position)
+            local cf = CFrame.lookAt(camPos, CurrentTarget.Position)
             Camera.CFrame = Camera.CFrame:Lerp(cf, Settings.Aim_Smoothness)
         else
+            -- Find new target (raycast only when searching, not every frame while locked)
             CurrentTarget = nil
             local bestScore = math.huge
+            local rayParams = RaycastParams.new()
+            rayParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+            rayParams.FilterType  = Enum.RaycastFilterType.Exclude
+            rayParams.IgnoreWater = true
             for _, target in ipairs(targets) do
                 local show = (target.IsNPC and Settings.NPC_Enabled) or not target.IsNPC
                 if show then
@@ -1776,26 +1827,18 @@ RunService.RenderStepped:Connect(function()
                     if model and hum and hum.Health > 0 then
                         local part = model:FindFirstChild(Settings.Aim_Part)
                         if part then
-                            local d = (Camera.CFrame.Position - part.Position).Magnitude
+                            local partPos = part.Position
+                            local d = (camPos - partPos).Magnitude
                             if d <= Settings.ESP_MaxDistance then
-                                local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
+                                local sp, onScreen = Camera:WorldToViewportPoint(partPos)
                                 if onScreen then
                                     local sd = (Vector2.new(sp.X, sp.Y) - screenCenter).Magnitude
                                     if sd < Settings.FOV_Radius then
-                                        -- Priority: FOV = screen distance, Health = lowest HP first
                                         local score = Settings.Aim_Priority == "Health"
                                             and hum.Health
                                             or  sd
                                         if score < bestScore then
-                                            local params = RaycastParams.new()
-                                            params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
-                                            params.FilterType  = Enum.RaycastFilterType.Exclude
-                                            params.IgnoreWater = true
-                                            local ray = workspace:Raycast(
-                                                Camera.CFrame.Position,
-                                                part.Position - Camera.CFrame.Position,
-                                                params
-                                            )
+                                            local ray = workspace:Raycast(camPos, partPos - camPos, rayParams)
                                             if not ray or ray.Instance:IsDescendantOf(model) then
                                                 bestScore     = score
                                                 CurrentTarget = part
@@ -1809,7 +1852,7 @@ RunService.RenderStepped:Connect(function()
                 end
             end
             if CurrentTarget then
-                local cf = CFrame.lookAt(Camera.CFrame.Position, CurrentTarget.Position)
+                local cf = CFrame.lookAt(camPos, CurrentTarget.Position)
                 Camera.CFrame = Camera.CFrame:Lerp(cf, Settings.Aim_Smoothness)
             end
         end
@@ -1914,40 +1957,43 @@ RunService.RenderStepped:Connect(function()
         for _, dot in ipairs(RadarDots) do dot.Visible = false end
     end
 
-    -- ── LOOT ESP ──────────────────────────────────────────────────
+    -- ── LOOT ESP ────────────────────────────────────────────────
+    -- Throttled: update positions every 4 frames, scan/hide every frame
     if Settings.Loot_Enabled then
-        local lootIdx = 0
-        for _, tool in ipairs(LootObjects) do
-            if tool and tool.Parent then
-                local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildOfClass("BasePart")
-                if handle then
-                    local sp, onScreen = Camera:WorldToViewportPoint(handle.Position)
-                    local ld = (Camera.CFrame.Position - handle.Position).Magnitude
-                    if onScreen and ld <= Settings.ESP_MaxDistance then
-                        -- Tier check
-                        local tier = GetLootTier(tool.Name)
-                        -- If Best_Loot_Only is on, skip items with no tier
-                        if Settings.Best_Loot_Only and not tier then
-                            -- skip
-                        else
-                            lootIdx = lootIdx + 1
-                            if lootIdx <= LOOT_MAX then
-                                local lbl = LootLabels[lootIdx]
-                                -- S = gold, A = orange, unknown = white
-                                lbl.Color = tier == "S" and Color3.fromRGB(255, 215, 0)
-                                         or tier == "A" and Color3.fromRGB(255, 140, 0)
-                                         or Color3.fromRGB(200, 200, 200)
-                                local badge = tier and ("[" .. tier .. "] ") or ""
-                                lbl.Text     = "◆ " .. badge .. tool.Name
-                                lbl.Position = Vector2.new(sp.X, sp.Y)
-                                lbl.Visible  = true
+        _lootFrame = _lootFrame + 1
+        if _lootFrame >= 4 then _lootFrame = 0 end
+        if _lootFrame == 0 then
+            local lootIdx = 0
+            local _camPos = Camera.CFrame.Position
+            for _, tool in ipairs(LootObjects) do
+                if tool and tool.Parent then
+                    local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildOfClass("BasePart")
+                    if handle then
+                        local sp, onScreen = Camera:WorldToViewportPoint(handle.Position)
+                        local ld = (_camPos - handle.Position).Magnitude
+                        if onScreen and ld <= Settings.ESP_MaxDistance then
+                            local tier = GetLootTier(tool.Name)
+                            if Settings.Best_Loot_Only and not tier then
+                                -- skip
+                            else
+                                lootIdx = lootIdx + 1
+                                if lootIdx <= LOOT_MAX then
+                                    local lbl = LootLabels[lootIdx]
+                                    lbl.Color = tier == "S" and Color3.fromRGB(255, 215, 0)
+                                             or tier == "A" and Color3.fromRGB(255, 140, 0)
+                                             or Color3.fromRGB(200, 200, 200)
+                                    local badge = tier and ("[" .. tier .. "] ") or ""
+                                    lbl.Text     = "◆ " .. badge .. tool.Name
+                                    lbl.Position = Vector2.new(sp.X, sp.Y)
+                                    lbl.Visible  = true
+                                end
                             end
                         end
                     end
                 end
             end
+            for i = lootIdx + 1, LOOT_MAX do LootLabels[i].Visible = false end
         end
-        for i = lootIdx + 1, LOOT_MAX do LootLabels[i].Visible = false end
     else
         for _, lbl in ipairs(LootLabels) do lbl.Visible = false end
     end
@@ -2028,4 +2074,79 @@ UserInput.InputBegan:Connect(function(input, _gameProcessed)
     if input.KeyCode == Enum.KeyCode.End then
         ForceExtract()
     end
+    -- Eject keybind [DELETE]
+    if input.KeyCode == Enum.KeyCode.Delete then
+        EjectAura()
+    end
 end)
+
+-- ============================================================
+-- EJECT SYSTEM
+-- Cleanly tears down every connection, drawing object, and GUI.
+-- Safe to reinject after ejecting.
+-- ============================================================
+EjectAura = function()
+    -- Kill render loop
+    if MainRenderConn then
+        MainRenderConn:Disconnect()
+        MainRenderConn = nil
+    end
+
+    -- Kill mouse lock loop
+    if mouseLockConn then
+        mouseLockConn:Disconnect()
+        mouseLockConn = nil
+    end
+
+    -- Kill fullbright enforcer
+    if fullbrightConn then
+        fullbrightConn:Disconnect()
+        fullbrightConn = nil
+    end
+
+    -- Restore mouse + lighting
+    pcall(function() UserInput.MouseBehavior = Enum.MouseBehavior.LockCenter end)
+    pcall(function()
+        Lighting.Brightness     = OriginalLighting.Brightness
+        Lighting.Ambient        = OriginalLighting.Ambient
+        Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+        Lighting.ClockTime      = OriginalLighting.ClockTime
+        Lighting.GlobalShadows  = OriginalLighting.GlobalShadows
+        Lighting.FogEnd         = OriginalLighting.FogEnd
+        Lighting.FogStart       = OriginalLighting.FogStart
+        for effect, state in pairs(OriginalEffects) do
+            pcall(function() effect.Enabled = state end)
+        end
+    end)
+
+    -- Remove Drawing objects: FOV circle, crosshair, loot labels, ESP
+    pcall(function() FOVCircle:Remove() end)
+    pcall(function()
+        for _, l in ipairs(CrosshairLines) do l:Remove() end
+        CrosshairDot:Remove()
+    end)
+    pcall(function()
+        for _, lbl in ipairs(LootLabels) do lbl:Remove() end
+    end)
+    pcall(function()
+        for _, entry in pairs(ESPObjects) do
+            entry.Box:Remove()
+            entry.Text:Remove()
+            entry.HealthBarBG:Remove()
+            entry.HealthBarFill:Remove()
+            entry.Tracer:Remove()
+            for _, bone in ipairs(entry.Skeleton) do bone:Remove() end
+            if entry.Highlight and entry.Highlight.Parent then
+                entry.Highlight:Destroy()
+            end
+        end
+    end)
+
+    -- Destroy the GUI last (so no more input handling)
+    pcall(function() ScreenGui:Destroy() end)
+
+    -- Signal ejected so reinject scripts can check _G.AuraLoaded
+    _G.AuraLoaded = nil
+end
+
+ejectBtn.MouseButton1Click:Connect(EjectAura)
