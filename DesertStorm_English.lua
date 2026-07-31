@@ -976,7 +976,6 @@ RunService.RenderStepped:Connect(function()
     for _, target in ipairs(targets) do
         local model = target.Model
         local hum   = model:FindFirstChildOfClass("Humanoid")
-        -- "HumanoidRootPart" verified from decoded strings
         local root  = model:FindFirstChild("HumanoidRootPart")
         local entry = ESPObjects[model] or CreateESPEntry(model)
 
@@ -984,42 +983,78 @@ RunService.RenderStepped:Connect(function()
                         or (not target.IsNPC and Settings.ESP_Enabled)
 
         if shouldShow and hum and hum.Health > 0 and root then
+            -- Read FRESH head position this frame so box sticks during lean (Q/E)
+            local head = model:FindFirstChild("Head")
             local screenPos, onScreen = Camera:WorldToViewportPoint(root.Position)
-            local dist  = (Camera.CFrame.Position - root.Position).Magnitude
-            -- Orange for NPCs, Accent for players (verified from original)
-            local color = target.IsNPC and Colors.Orange or Colors.Accent
+            local dist = (Camera.CFrame.Position - root.Position).Magnitude
+
+            -- ── COLOR: Green = teammate, Red = visible enemy, Yellow = behind wall, Orange = NPC
+            local color
+            if target.IsNPC then
+                color = Colors.Orange
+            else
+                local plr = Players:GetPlayerFromCharacter(model)
+                local isTeammate = plr and LocalPlayer.Team
+                    and plr.Team == LocalPlayer.Team
+
+                if isTeammate then
+                    color = Color3.fromRGB(0, 220, 80)  -- Green
+                else
+                    -- Raycast from camera to aim part — red if clear shot, yellow if blocked
+                    local aimPart = model:FindFirstChild(Settings.Aim_Part) or head or root
+                    local canShoot = false
+                    if aimPart then
+                        local params = RaycastParams.new()
+                        params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+                        params.FilterType  = Enum.RaycastFilterType.Exclude
+                        params.IgnoreWater = true
+                        local ray = workspace:Raycast(
+                            Camera.CFrame.Position,
+                            aimPart.Position - Camera.CFrame.Position,
+                            params
+                        )
+                        canShoot = not ray or ray.Instance:IsDescendantOf(model)
+                    end
+                    color = canShoot
+                        and Color3.fromRGB(255, 50,  50)   -- Red   = can shoot
+                        or  Color3.fromRGB(255, 200, 0)    -- Yellow = blocked
+                end
+            end
 
             if dist <= Settings.ESP_MaxDistance and onScreen then
                 entry.Box.Color              = color
                 entry.Text.Color             = color
                 entry.Highlight.FillColor    = color
-                entry.Highlight.OutlineColor = Colors.Green
+                entry.Highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
 
                 for _, bone in ipairs(entry.Skeleton) do bone.Color = color end
 
                 -- "Full" = Highlight overlay, "2D Box" = drawn box
                 if Settings.ESP_Type == "Full" then
-                    entry.Box.Visible        = false
-                    entry.Highlight.Adornee  = model
-                    entry.Highlight.Parent   = workspace
+                    entry.Box.Visible       = false
+                    entry.Highlight.Adornee = model
+                    entry.Highlight.Parent  = workspace
                 else
                     if entry.Highlight.Parent then entry.Highlight.Parent = nil end
-                    local head = model:FindFirstChild("Head")
+                    -- Use fresh head position this frame — sticks during Q/E lean
                     if head then
-                        local topPos, _    = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-                        local bottomPos, _ = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+                        local topPos    = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                        local bottomPos = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+                        local rootScreen = Camera:WorldToViewportPoint(root.Position)
                         local height = math.abs(topPos.Y - bottomPos.Y)
                         local width  = height * 0.6
                         entry.Box.Size     = Vector2.new(width, height)
-                        entry.Box.Position = Vector2.new(screenPos.X - width / 2, topPos.Y)
+                        -- Anchor X to root screen center so it tracks horizontal lean perfectly
+                        entry.Box.Position = Vector2.new(rootScreen.X - width / 2, topPos.Y)
                         entry.Box.Visible  = true
                     end
                 end
 
-                -- "Mostrar Nombre y Distancia" → Show Name and Distance
+                -- Show Name and Distance
                 if Settings.ESP_ShowInfo then
+                    local boxH = entry.Box.Size and entry.Box.Size.Y or 0
                     entry.Text.Text     = string.format("%s\n[%dm]", target.Name, math.floor(dist))
-                    entry.Text.Position = Vector2.new(screenPos.X, screenPos.Y + (entry.Box.Size and entry.Box.Size.Y / 2 or 0) + 5)
+                    entry.Text.Position = Vector2.new(screenPos.X, screenPos.Y + boxH / 2 + 5)
                     entry.Text.Visible  = true
                 else
                     entry.Text.Visible = false
