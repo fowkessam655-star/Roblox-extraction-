@@ -523,19 +523,45 @@ TabButtons["Aimbot"].TextColor3       = Colors.White
 TabPages["Aimbot"].Visible            = true
 
 -- ============================================================
+-- DRAWING SUPPORT CHECK + DUMMY FALLBACK
+-- ============================================================
+local DrawingSupported = (typeof(Drawing) == "table" or typeof(Drawing) == "userdata")
+    and typeof(Drawing.new) == "function"
+
+-- If the executor doesn't expose Drawing, we create a dummy
+-- object factory so the rest of the script never errors on nil.
+local function NewDrawing(kind)
+    if DrawingSupported then
+        local ok, obj = pcall(Drawing.new, kind)
+        if ok then return obj end
+    end
+    -- Dummy: swallows all property sets silently, has no-op Remove()
+    local dummy = {}
+    local mt = {
+        __index = function(_, k) return dummy[k] end,
+        __newindex = function(_, k, v) rawset(dummy, k, v) end,
+    }
+    setmetatable(dummy, mt)
+    dummy.Visible = false
+    dummy.Remove  = function() end
+    dummy.Destroy = function() end
+    return dummy
+end
+
+-- ============================================================
 -- ESP DRAWING
 -- ============================================================
 local ESPObjects = {}
 
-local FOVCircle = Drawing.new("Circle")
+local FOVCircle = NewDrawing("Circle")
 FOVCircle.Thickness = 1.5
 FOVCircle.Color     = Colors.Accent
 FOVCircle.Filled    = false
 
 local function CreateESPEntry(model)
     local entry = {
-        Box       = Drawing.new("Square"),
-        Text      = Drawing.new("Text"),
+        Box       = NewDrawing("Square"),
+        Text      = NewDrawing("Text"),
         Skeleton  = {},
         Highlight = Instance.new("SelectionBox"),
     }
@@ -547,7 +573,7 @@ local function CreateESPEntry(model)
     entry.Highlight.FillTransparency    = 0.5
     entry.Highlight.OutlineTransparency = 0.1
     for i = 1, 12 do
-        local bone = Drawing.new("Line")
+        local bone = NewDrawing("Line")
         bone.Thickness = 1.5
         table.insert(entry.Skeleton, bone)
     end
