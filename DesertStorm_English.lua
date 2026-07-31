@@ -61,7 +61,8 @@ local Settings = {
     NoRecoil        = false,
     NoSway          = false,
     SpeedHack       = false,
-    SpeedValue      = 50,
+    SpeedValue      = 32,
+    MagicBullet     = false,
     -- esp
     ESP_Enabled     = false,
     NPC_Enabled     = false,
@@ -847,27 +848,121 @@ end
 local fullbrightConn = nil
 local speedHackConn  = nil
 
--- Speed hack — velocity injection via AssemblyLinearVelocity.
--- Avoids changing WalkSpeed (server knows the default and rejects fast positions).
--- Instead we push the HumanoidRootPart in Humanoid.MoveDirection every Stepped
--- (client physics step, before server sees it).
--- Extra velocity = (SpeedValue - 16) * moveDir, so at SpeedValue=16 it does nothing.
-speedHackConn = RunService.Stepped:Connect(function()
-    if not Settings.SpeedHack then return end
+-- Speed hack — set WalkSpeed once per toggle + reapply on respawn.
+-- No per-frame fighting (that causes jitter/rubber-band).
+-- Moderate values (24-35) are safest; high values may rubber-band in strict games.
+local function ApplySpeed()
     local char = LocalPlayer.Character
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     local hum  = char and char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then return end
-    local moveDir = hum.MoveDirection
-    if moveDir.Magnitude < 0.1 then return end  -- standing still — don't inject
-    local extra = (Settings.SpeedValue - 16)
-    if extra <= 0 then return end
-    hrp.AssemblyLinearVelocity = Vector3.new(
-        moveDir.X * Settings.SpeedValue,
-        hrp.AssemblyLinearVelocity.Y,  -- preserve vertical (gravity/jumping)
-        moveDir.Z * Settings.SpeedValue
-    )
+    if hum then
+        hum.WalkSpeed = Settings.SpeedHack and Settings.SpeedValue or 16
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    if Settings.SpeedHack then
+        char:WaitForChild("Humanoid", 5).WalkSpeed = Settings.SpeedValue
+    end
 end)
+
+-- ── MAGIC BULLET ─────────────────────────────────────────────
+-- Hooks RemoteEvent:FireServer so when the weapon sends a shot to the server,
+-- any Vector3 / CFrame / Instance argument that looks like a hit position
+-- gets replaced with the current target's head position.
+-- Requires hookfunction (available in most executors: Synapse, Fluxus, etc.)
+do
+    local mbHookActive = false
+    local _origFireServer
+
+    local function GetMBTarget()
+        -- Use aimbot CurrentTarget if available, else find nearest head
+        if CurrentTarget and CurrentTarget.Parent then
+            return CurrentTarget.Position
+        end
+        -- Fallback: nearest visible player head
+        local camPos = Camera.CFrame.Position
+        local best, bestDist = nil, math.huge
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then
+                local head = plr.Character:FindFirstChild("Head")
+                if head then
+                    local d = (camPos - head.Position).Magnitude
+                    if d < bestDist then
+                        bestDist = d
+                        best     = head.Position
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    local function PatchArgs(args, targetPos)
+        local patched = table.pack(table.unpack(args))
+        for i = 1, patched.n do
+            local v = patched[i]
+            if typeof(v) == "Vector3" then
+                -- Replace any Vector3 that looks like a world position (not a direction)
+                if v.Magnitude > 1 then
+                    patched[i] = targetPos
+                end
+            elseif typeof(v) == "CFrame" then
+                patched[i] = CFrame.new(targetPos)
+            elseif typeof(v) == "Instance" and v:IsA("BasePart") then
+                -- Some games pass the hit part — don't replace Instance args
+            end
+        end
+        return patched
+    end
+
+    local function EnableMagicBullet()
+        if mbHookActive then return end
+        if not hookfunction then return end  -- executor doesn't support hooking
+        _origFireServer = hookfunction(RemoteEvent.FireServer, function(self, ...)
+            if not Settings.MagicBullet then
+                return _origFireServer(self, ...)
+            end
+            -- Only intercept remotes fired while the local player has a gun
+            local char = LocalPlayer.Character
+            local tool = char and char:FindFirstChildOfClass("Tool")
+            if not tool then
+                return _origFireServer(self, ...)
+            end
+            local targetPos = GetMBTarget()
+            if not targetPos then
+                return _origFireServer(self, ...)
+            end
+            local args = table.pack(...)
+            local patched = PatchArgs(args, targetPos)
+            return _origFireServer(self, table.unpack(patched, 1, patched.n))
+        end)
+        mbHookActive = true
+    end
+
+    -- Also hook RemoteFunction:InvokeServer for games that use RF for damage
+    local _origInvokeServer
+    local function EnableMagicBulletRF()
+        if not hookfunction then return end
+        if _origInvokeServer then return end
+        _origInvokeServer = hookfunction(RemoteFunction.InvokeServer, function(self, ...)
+            if not Settings.MagicBullet then
+                return _origInvokeServer(self, ...)
+            end
+            local char = LocalPlayer.Character
+            local tool = char and char:FindFirstChildOfClass("Tool")
+            if not tool then return _origInvokeServer(self, ...) end
+            local targetPos = GetMBTarget()
+            if not targetPos then return _origInvokeServer(self, ...) end
+            local args    = table.pack(...)
+            local patched = PatchArgs(args, targetPos)
+            return _origInvokeServer(self, table.unpack(patched, 1, patched.n))
+        end)
+    end
+
+    -- Attempt to enable — will silently no-op if hookfunction is unavailable
+    pcall(EnableMagicBullet)
+    pcall(EnableMagicBulletRF)
+end
 
 local function SetFullbright(enabled)
     if enabled then
@@ -939,9 +1034,26 @@ speedInfo.TextXAlignment     = Enum.TextXAlignment.Left
 speedInfo.Text               = "Keybind: [H]"
 CreateToggle(movementSection, "Speed Hack", Settings.SpeedHack, function(v)
     Settings.SpeedHack = v
+    ApplySpeed()
 end)
-CreateSlider(movementSection, "Speed", 16, 250, Settings.SpeedValue, function(v)
+CreateSlider(movementSection, "Speed", 16, 100, Settings.SpeedValue, function(v)
     Settings.SpeedValue = v
+    if Settings.SpeedHack then ApplySpeed() end
+end)
+
+-- ── COMBAT ────────────────────────────────────────────────────
+local combatSection = CreateSection(SettingsTab, "Combat")
+local mbInfo = Instance.new("TextLabel", combatSection)
+mbInfo.Size               = UDim2.new(1, -12, 0, 28)
+mbInfo.BackgroundTransparency = 1
+mbInfo.TextColor3         = Colors.Gray1
+mbInfo.Font               = Enum.Font.Gotham
+mbInfo.TextSize           = 11
+mbInfo.TextXAlignment     = Enum.TextXAlignment.Left
+mbInfo.TextWrapped        = true
+mbInfo.Text               = "Magic Bullet: redirects shots to target head."
+CreateToggle(combatSection, "Magic Bullet", Settings.MagicBullet, function(v)
+    Settings.MagicBullet = v
 end)
 
 -- ── FORCE EXTRACT ────────────────────────────────────────────
@@ -1132,7 +1244,7 @@ local CFG_KEYS = {
     "ESP_MaxDistance","HealthBar","Tracer","WeaponLabel",
     "Loot_Enabled","Best_Loot_Only","Radar_Enabled",
     "Crosshair_Enabled","Crosshair_Style",
-    "SpeedHack","SpeedValue",
+    "SpeedHack","SpeedValue","MagicBullet",
 }
 
 local function CfgSave(name)
@@ -2456,6 +2568,7 @@ UserInput.InputBegan:Connect(function(input, _gameProcessed)
     -- Speed hack toggle [H]
     if input.KeyCode == Enum.KeyCode.H then
         Settings.SpeedHack = not Settings.SpeedHack
+        ApplySpeed()
     end
 end)
 
