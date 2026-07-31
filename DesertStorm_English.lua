@@ -58,6 +58,7 @@ local Settings = {
     Aim_Key         = "Right Click",
     Aim_Priority    = "FOV",
     NoRecoil        = false,
+    NoSway          = false,
     -- esp
     ESP_Enabled     = false,
     NPC_Enabled     = false,
@@ -740,6 +741,10 @@ CreateDropdown(targetingSection, "Priority",
 )
 CreateToggle(targetingSection, "No Recoil", Settings.NoRecoil, function(v)
     Settings.NoRecoil = v
+    if not v then nrPitch = nil end  -- reset tracked pitch when toggling off
+end)
+CreateToggle(targetingSection, "No Sway", Settings.NoSway, function(v)
+    Settings.NoSway = v
 end)
 
 -- ── VISUALS TAB ─────────────────────────────────────────────
@@ -1559,7 +1564,9 @@ local function IsAimKeyDown()
     return false
 end
 
-local nrPrevCF = nil   -- previous-frame CFrame for no-recoil delta
+local nrPrevCF   = nil    -- previous-frame CFrame for sensitivity calibration
+local nrPitch    = nil    -- our maintained pitch value (no-recoil)
+local nrSensEst  = 0.0025 -- rad/pixel estimate, self-calibrates from yaw delta
 
 -- ============================================================
 -- RENDER LOOP
@@ -1869,22 +1876,46 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
         CurrentTarget = nil
     end
 
-    -- ── NO RECOIL ─────────────────────────────────────────────────
-    -- Compares this frame's camera pitch to last frame's.
-    -- If pitch rose more than mouse delta accounts for → recoil kick → cancel it.
-    if Settings.NoRecoil then
-        if nrPrevCF then
-            local currX, currY, _ = Camera.CFrame:ToOrientation()
-            local prevX,  _,   _ = nrPrevCF:ToOrientation()
-            local mouseDelta      = UserInput:GetMouseDelta()
-            local expectedPitch   = -mouseDelta.Y * 0.0035
-            local recoilKick      = (currX - prevX) - expectedPitch
-            if recoilKick > 0.003 then
-                Camera.CFrame = Camera.CFrame * CFrame.Angles(-recoilKick * 0.85, 0, 0)
+    -- ── NO RECOIL / NO SWAY ───────────────────────────────────────
+    -- No recoil: maintain our OWN pitch variable updated only from mouse Y.
+    --   Sensitivity is self-calibrated every frame by watching yaw change vs
+    --   mouse X delta (yaw = pure mouse, no gun ever adds yaw recoil).
+    --   Camera pitch is then forced to our value → recoil never lands.
+    -- No sway: force camera Z rotation to 0 every frame (removes weapon bob/tilt).
+    if Settings.NoRecoil or Settings.NoSway then
+        local mouseDelta       = UserInput:GetMouseDelta()
+        local currX, currY, currZ = Camera.CFrame:ToOrientation()
+
+        -- Self-calibrate: yaw only changes with mouse X, so
+        --   nrSensEst ≈ -yawDelta / mouseDelta.X
+        if nrPrevCF and math.abs(mouseDelta.X) > 0.8 then
+            local _, prevY, _ = nrPrevCF:ToOrientation()
+            local yawDelta    = currY - prevY
+            if math.abs(yawDelta) > 0.00005 then
+                local est = -yawDelta / mouseDelta.X
+                if est > 0.0003 and est < 0.03 then
+                    nrSensEst = nrSensEst * 0.88 + est * 0.12
+                end
             end
         end
+
+        if Settings.NoRecoil then
+            -- Initialise on first active frame
+            if nrPitch == nil then nrPitch = currX end
+            -- Advance only by mouse Y (converted with calibrated sensitivity)
+            nrPitch = math.clamp(nrPitch - mouseDelta.Y * nrSensEst, -1.45, 1.45)
+            local finalZ = Settings.NoSway and 0 or currZ
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position)
+                          * CFrame.fromOrientation(nrPitch, currY, finalZ)
+        elseif Settings.NoSway then
+            -- Only sway removal — don't touch pitch
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position)
+                          * CFrame.fromOrientation(currX, currY, 0)
+        end
+
         nrPrevCF = Camera.CFrame
     else
+        nrPitch  = nil
         nrPrevCF = nil
     end
 
