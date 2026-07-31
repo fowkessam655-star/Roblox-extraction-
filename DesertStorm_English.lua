@@ -1421,9 +1421,15 @@ end)
 -- ============================================================
 -- SET DEFAULT TAB
 -- ============================================================
-TabButtons["Aimbot"].BackgroundColor3 = Colors.BG3
-TabButtons["Aimbot"].TextColor3       = Colors.Green
-TabPages["Aimbot"].Visible            = true
+do
+    local defaultId  = "Aimbot"
+    local defaultWrap = TabButtons[defaultId]
+    defaultWrap.BackgroundColor3 = Colors.BG3
+    local defaultBtn = defaultWrap:FindFirstChildWhichIsA("TextButton")
+    if defaultBtn then defaultBtn.TextColor3 = Colors.White end
+    if TabAccentBars[defaultId] then TabAccentBars[defaultId].Visible = true end
+    TabPages[defaultId].Visible = true
+end
 
 -- ============================================================
 -- ESP OBJECTS
