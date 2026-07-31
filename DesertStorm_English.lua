@@ -1589,11 +1589,7 @@ RunService.RenderStepped:Connect(function()
     local aimActive = IsAimKeyDown()
     if Settings.Aimbot_Enabled and aimActive and not ScreenGui.Enabled then
         if CurrentTarget and IsVisible(CurrentTarget) then
-            -- Velocity prediction: lead the target
-            local d3 = (Camera.CFrame.Position - CurrentTarget.Position).Magnitude
-            local vel = CurrentTarget.AssemblyLinearVelocity or Vector3.new()
-            local predicted = CurrentTarget.Position + vel * (d3 / 500)
-            local cf = CFrame.lookAt(Camera.CFrame.Position, predicted)
+            local cf = CFrame.lookAt(Camera.CFrame.Position, CurrentTarget.Position)
             Camera.CFrame = Camera.CFrame:Lerp(cf, Settings.Aim_Smoothness)
         else
             CurrentTarget = nil
@@ -1639,10 +1635,7 @@ RunService.RenderStepped:Connect(function()
                 end
             end
             if CurrentTarget then
-                local d3  = (Camera.CFrame.Position - CurrentTarget.Position).Magnitude
-                local vel = CurrentTarget.AssemblyLinearVelocity or Vector3.new()
-                local predicted = CurrentTarget.Position + vel * (d3 / 500)
-                local cf = CFrame.lookAt(Camera.CFrame.Position, predicted)
+                local cf = CFrame.lookAt(Camera.CFrame.Position, CurrentTarget.Position)
                 Camera.CFrame = Camera.CFrame:Lerp(cf, Settings.Aim_Smoothness)
             end
         end
