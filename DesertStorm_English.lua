@@ -49,16 +49,29 @@ local Colors = {
 -- SETTINGS  (verified from decoded original)
 -- ============================================================
 local Settings = {
+    -- aimbot
     Aimbot_Enabled  = true,
-    ESP_Enabled     = false,
-    NPC_Enabled     = false,
-    ESP_Type        = "2D Box",      -- original: "Caja 2D"
-    ESP_ShowInfo    = true,
-    ESP_Skeleton    = true,
-    ESP_MaxDistance = 1000,
     FOV_Radius      = 1500,
     Aim_Part        = "Head",
     Aim_Smoothness  = 0.2,
+    Aim_Key         = "Right Click",   -- "Right Click" | "CapsLock" | "F" | "V"
+    Aim_Priority    = "FOV",           -- "FOV" | "Health"
+    NoRecoil        = false,
+    -- esp
+    ESP_Enabled     = false,
+    NPC_Enabled     = false,
+    ESP_Type        = "2D Box",
+    ESP_ShowInfo    = true,
+    ESP_Skeleton    = true,
+    ESP_MaxDistance = 1000,
+    HealthBar       = true,
+    Tracer          = false,
+    WeaponLabel     = true,
+    Loot_Enabled    = false,
+    Radar_Enabled   = false,
+    -- visuals
+    Crosshair_Enabled = false,
+    Crosshair_Style   = "Cross",      -- "Cross" | "Dot" | "Circle"
 }
 
 -- ============================================================
@@ -511,6 +524,20 @@ CreateDropdown(aimbotConfig, "Target Bone",
     function(v) Settings.Aim_Part = v end
 )
 
+-- Section: "Targeting"
+local targetingSection = CreateSection(AimbotTab, "Targeting")
+CreateDropdown(targetingSection, "Aim Key",
+    {"Right Click", "CapsLock", "F", "V"}, 1,
+    function(v) Settings.Aim_Key = v end
+)
+CreateDropdown(targetingSection, "Priority",
+    {"FOV", "Health"}, 1,
+    function(v) Settings.Aim_Priority = v end
+)
+CreateToggle(targetingSection, "No Recoil", Settings.NoRecoil, function(v)
+    Settings.NoRecoil = v
+end)
+
 -- ── VISUALS TAB ─────────────────────────────────────────────
 -- Section: "ESP Filters"  (original: "Filtros ESP")
 local espFilters = CreateSection(VisualsTab, "ESP Filters")
@@ -542,6 +569,24 @@ end)
 CreateSlider(espFormat, "Max ESP Distance", 50, 5000, Settings.ESP_MaxDistance, function(v)
     Settings.ESP_MaxDistance = v
 end)
+
+-- Section: "Overlays"
+local overlaysSection = CreateSection(VisualsTab, "Overlays")
+CreateToggle(overlaysSection, "Health Bars",   Settings.HealthBar,    function(v) Settings.HealthBar    = v end)
+CreateToggle(overlaysSection, "Tracers",       Settings.Tracer,       function(v) Settings.Tracer       = v end)
+CreateToggle(overlaysSection, "Weapon Label",  Settings.WeaponLabel,  function(v) Settings.WeaponLabel  = v end)
+CreateToggle(overlaysSection, "Loot ESP",      Settings.Loot_Enabled, function(v) Settings.Loot_Enabled = v end)
+CreateToggle(overlaysSection, "Radar",         Settings.Radar_Enabled,function(v) Settings.Radar_Enabled= v end)
+
+-- Section: "Crosshair"
+local crosshairSection = CreateSection(VisualsTab, "Crosshair")
+CreateToggle(crosshairSection, "Crosshair", Settings.Crosshair_Enabled, function(v)
+    Settings.Crosshair_Enabled = v
+end)
+CreateDropdown(crosshairSection, "Style",
+    {"Cross", "Dot", "Circle"}, 1,
+    function(v) Settings.Crosshair_Style = v end
+)
 
 -- ── SETTINGS TAB  (original: "Ajustes") ─────────────────────
 -- Section: "System Information"
@@ -878,6 +923,111 @@ MakeButton(btnRow, "✕  CLEAR", Colors.Gray2,  function()
 end)
 
 -- ============================================================
+-- CROSSHAIR DRAWINGS
+-- ============================================================
+local CrosshairLines = {}
+for i = 1, 4 do
+    local l = NewDrawing("Line")
+    l.Thickness = 1.5
+    l.Color     = Color3.fromRGB(255, 255, 255)
+    l.Visible   = false
+    table.insert(CrosshairLines, l)
+end
+local CrosshairDot = NewDrawing("Circle")
+CrosshairDot.Color    = Color3.fromRGB(255, 255, 255)
+CrosshairDot.Filled   = true
+CrosshairDot.Visible  = false
+
+-- ============================================================
+-- RADAR GUI
+-- ============================================================
+local RADAR_MAX_DOTS = 24
+local RadarFrame = Instance.new("Frame", ScreenGui)
+RadarFrame.Name                 = "AuraRadar"
+RadarFrame.Size                 = UDim2.new(0, 180, 0, 180)
+RadarFrame.Position             = UDim2.new(1, -192, 1, -192)
+RadarFrame.BackgroundColor3     = Color3.fromRGB(0, 0, 0)
+RadarFrame.BackgroundTransparency = 0.45
+RadarFrame.BorderSizePixel      = 0
+RadarFrame.Visible              = false
+Instance.new("UICorner", RadarFrame).CornerRadius = UDim.new(1, 0)
+
+-- Radar border ring
+local RadarStroke = Instance.new("UIStroke", RadarFrame)
+RadarStroke.Color     = Colors.Border
+RadarStroke.Thickness = 1
+
+-- Player center dot
+local RadarSelf = Instance.new("Frame", RadarFrame)
+RadarSelf.Size             = UDim2.new(0, 8, 0, 8)
+RadarSelf.AnchorPoint      = Vector2.new(0.5, 0.5)
+RadarSelf.Position         = UDim2.new(0.5, 0, 0.5, 0)
+RadarSelf.BackgroundColor3 = Colors.Green
+RadarSelf.BorderSizePixel  = 0
+Instance.new("UICorner", RadarSelf).CornerRadius = UDim.new(1, 0)
+
+-- North tick
+local RadarNorth = Instance.new("TextLabel", RadarFrame)
+RadarNorth.Size               = UDim2.new(1, 0, 0, 14)
+RadarNorth.Position           = UDim2.new(0, 0, 0, 4)
+RadarNorth.BackgroundTransparency = 1
+RadarNorth.Text               = "N"
+RadarNorth.TextColor3         = Colors.Gray1
+RadarNorth.Font               = Enum.Font.GothamBold
+RadarNorth.TextSize           = 10
+
+-- Enemy dots pool
+local RadarDots = {}
+for i = 1, RADAR_MAX_DOTS do
+    local dot = Instance.new("Frame", RadarFrame)
+    dot.Size             = UDim2.new(0, 6, 0, 6)
+    dot.AnchorPoint      = Vector2.new(0.5, 0.5)
+    dot.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+    dot.BorderSizePixel  = 0
+    dot.Visible          = false
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+    RadarDots[i] = dot
+end
+
+-- ============================================================
+-- LOOT ESP
+-- ============================================================
+local LootObjects = {}
+local LOOT_MAX    = 50
+local LootLabels  = {}
+for i = 1, LOOT_MAX do
+    local t = NewDrawing("Text")
+    t.Size    = 12
+    t.Color   = Color3.fromRGB(255, 215, 0)
+    t.Outline = true
+    t.Center  = true
+    t.Visible = false
+    table.insert(LootLabels, t)
+end
+
+-- Periodic loot scanner — finds Tools sitting in workspace (dropped/world items)
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if Settings.Loot_Enabled then
+            local found = {}
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("Tool") then
+                    local held = false
+                    for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr.Character and obj:IsDescendantOf(plr.Character) then
+                            held = true; break
+                        end
+                    end
+                    if not held then table.insert(found, obj) end
+                end
+            end
+            LootObjects = found
+        end
+    end
+end)
+
+-- ============================================================
 -- SET DEFAULT TAB
 -- ============================================================
 TabButtons["Aimbot"].BackgroundColor3 = Colors.BG3
@@ -925,16 +1075,22 @@ local function CreateESPEntry(model)
     hl.OutlineTransparency = 0.1
 
     local entry = {
-        Box      = NewDrawing("Square"),
-        Text     = NewDrawing("Text"),
-        Skeleton = {},
-        Highlight = hl,
+        Box           = NewDrawing("Square"),
+        Text          = NewDrawing("Text"),
+        HealthBarBG   = NewDrawing("Square"),
+        HealthBarFill = NewDrawing("Square"),
+        Tracer        = NewDrawing("Line"),
+        Skeleton      = {},
+        Highlight     = hl,
     }
-    entry.Box.Thickness = 1.5
-    entry.Box.Filled    = false
-    entry.Text.Size     = 13
-    entry.Text.Center   = true
-    entry.Text.Outline  = true
+    entry.Box.Thickness           = 1.5
+    entry.Box.Filled              = false
+    entry.Text.Size               = 13
+    entry.Text.Center             = true
+    entry.Text.Outline            = true
+    entry.HealthBarBG.Filled      = true
+    entry.HealthBarFill.Filled    = true
+    entry.Tracer.Thickness        = 1
     for i = 1, 12 do
         local bone = NewDrawing("Line")
         bone.Thickness = 1.5
@@ -975,8 +1131,11 @@ local R6Bones = {
 -- ============================================================
 local function HideESP(entry)
     if not entry then return end
-    entry.Box.Visible  = false
-    entry.Text.Visible = false
+    entry.Box.Visible           = false
+    entry.Text.Visible          = false
+    entry.HealthBarBG.Visible   = false
+    entry.HealthBarFill.Visible = false
+    entry.Tracer.Visible        = false
     if entry.Highlight.Parent then entry.Highlight.Parent = nil end
     for _, bone in ipairs(entry.Skeleton) do bone.Visible = false end
 end
@@ -999,6 +1158,25 @@ local function IsVisible(part)
 end
 
 -- ============================================================
+-- HELPERS — AIM KEY / NO RECOIL STATE
+-- ============================================================
+local function IsAimKeyDown()
+    local k = Settings.Aim_Key
+    if k == "Right Click" then
+        return UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    elseif k == "CapsLock" then
+        return UserInput:IsKeyDown(Enum.KeyCode.CapsLock)
+    elseif k == "F" then
+        return UserInput:IsKeyDown(Enum.KeyCode.F)
+    elseif k == "V" then
+        return UserInput:IsKeyDown(Enum.KeyCode.V)
+    end
+    return false
+end
+
+local nrPrevCF = nil   -- previous-frame CFrame for no-recoil delta
+
+-- ============================================================
 -- RENDER LOOP
 -- ============================================================
 local CurrentTarget = nil
@@ -1015,6 +1193,8 @@ RunService.RenderStepped:Connect(function()
     end
 
     local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local cx = screenCenter.X
+    local cy = screenCenter.Y
 
     -- Build target list
     local targets = {}
@@ -1032,7 +1212,6 @@ RunService.RenderStepped:Connect(function()
             table.insert(targets, {
                 Model = model,
                 IsNPC = true,
-                -- verified: original uses "[NPC] " prefix
                 Name  = "[NPC] " .. model.Name,
             })
         else
@@ -1045,17 +1224,16 @@ RunService.RenderStepped:Connect(function()
         if not model or not model.Parent then
             pcall(function() entry.Box:Remove() end)
             pcall(function() entry.Text:Remove() end)
-            for _, bone in ipairs(entry.Skeleton) do
-                pcall(function() bone:Remove() end)
-            end
-            if entry.Highlight.Parent then
-                pcall(function() entry.Highlight:Destroy() end)
-            end
+            pcall(function() entry.HealthBarBG:Remove() end)
+            pcall(function() entry.HealthBarFill:Remove() end)
+            pcall(function() entry.Tracer:Remove() end)
+            for _, bone in ipairs(entry.Skeleton) do pcall(function() bone:Remove() end) end
+            if entry.Highlight.Parent then pcall(function() entry.Highlight:Destroy() end) end
             ESPObjects[model] = nil
         end
     end
 
-    -- ESP render
+    -- ── ESP RENDER ───────────────────────────────────────────────
     for _, target in ipairs(targets) do
         local model = target.Model
         local hum   = model:FindFirstChildOfClass("Humanoid")
@@ -1066,24 +1244,20 @@ RunService.RenderStepped:Connect(function()
                         or (not target.IsNPC and Settings.ESP_Enabled)
 
         if shouldShow and hum and hum.Health > 0 and root then
-            -- Read FRESH head position this frame so box sticks during lean (Q/E)
-            local head = model:FindFirstChild("Head")
+            local head      = model:FindFirstChild("Head")
             local screenPos, onScreen = Camera:WorldToViewportPoint(root.Position)
-            local dist = (Camera.CFrame.Position - root.Position).Magnitude
+            local dist      = (Camera.CFrame.Position - root.Position).Magnitude
 
-            -- ── COLOR: Green = teammate, Red = visible enemy, Yellow = behind wall, Orange = NPC
+            -- Color: Green=teammate, Red=can shoot, Yellow=blocked, Orange=NPC
             local color
             if target.IsNPC then
                 color = Colors.Orange
             else
-                local plr = Players:GetPlayerFromCharacter(model)
-                local isTeammate = plr and LocalPlayer.Team
-                    and plr.Team == LocalPlayer.Team
-
+                local plr       = Players:GetPlayerFromCharacter(model)
+                local isTeammate = plr and LocalPlayer.Team and plr.Team == LocalPlayer.Team
                 if isTeammate then
-                    color = Color3.fromRGB(0, 220, 80)  -- Green
+                    color = Color3.fromRGB(0, 220, 80)
                 else
-                    -- Raycast from camera to aim part — red if clear shot, yellow if blocked
                     local aimPart = model:FindFirstChild(Settings.Aim_Part) or head or root
                     local canShoot = false
                     if aimPart then
@@ -1099,8 +1273,8 @@ RunService.RenderStepped:Connect(function()
                         canShoot = not ray or ray.Instance:IsDescendantOf(model)
                     end
                     color = canShoot
-                        and Color3.fromRGB(255, 50,  50)   -- Red   = can shoot
-                        or  Color3.fromRGB(255, 200, 0)    -- Yellow = blocked
+                        and Color3.fromRGB(255, 50,  50)
+                        or  Color3.fromRGB(255, 200, 0)
                 end
             end
 
@@ -1109,41 +1283,78 @@ RunService.RenderStepped:Connect(function()
                 entry.Text.Color             = color
                 entry.Highlight.FillColor    = color
                 entry.Highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-
                 for _, bone in ipairs(entry.Skeleton) do bone.Color = color end
 
-                -- "Full" = Highlight overlay, "2D Box" = drawn box
+                -- Box geometry (shared by health bar + tracer)
+                local boxHeight = 0
+                local boxTopY   = screenPos.Y
+                local rootScreen = Camera:WorldToViewportPoint(root.Position)
+
                 if Settings.ESP_Type == "Full" then
                     entry.Box.Visible       = false
                     entry.Highlight.Adornee = model
                     entry.Highlight.Parent  = workspace
                 else
                     if entry.Highlight.Parent then entry.Highlight.Parent = nil end
-                    -- Use fresh head position this frame — sticks during Q/E lean
                     if head then
                         local topPos    = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
                         local bottomPos = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
-                        local rootScreen = Camera:WorldToViewportPoint(root.Position)
-                        local height = math.abs(topPos.Y - bottomPos.Y)
-                        local width  = height * 0.6
-                        entry.Box.Size     = Vector2.new(width, height)
-                        -- Anchor X to root screen center so it tracks horizontal lean perfectly
-                        entry.Box.Position = Vector2.new(rootScreen.X - width / 2, topPos.Y)
+                        boxHeight = math.abs(topPos.Y - bottomPos.Y)
+                        local boxWidth = boxHeight * 0.6
+                        boxTopY = topPos.Y
+                        entry.Box.Size     = Vector2.new(boxWidth, boxHeight)
+                        entry.Box.Position = Vector2.new(rootScreen.X - boxWidth / 2, boxTopY)
                         entry.Box.Visible  = true
                     end
                 end
 
-                -- Show Name and Distance
+                -- Health bar (left of box, green→red)
+                if Settings.HealthBar and boxHeight > 0 then
+                    local hp    = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+                    local barX  = entry.Box.Position.X - 5
+                    local fillH = boxHeight * hp
+                    entry.HealthBarBG.Size     = Vector2.new(3, boxHeight)
+                    entry.HealthBarBG.Position = Vector2.new(barX, boxTopY)
+                    entry.HealthBarBG.Color    = Color3.fromRGB(20, 20, 20)
+                    entry.HealthBarBG.Visible  = true
+                    entry.HealthBarFill.Size     = Vector2.new(3, fillH)
+                    entry.HealthBarFill.Position = Vector2.new(barX, boxTopY + (boxHeight - fillH))
+                    entry.HealthBarFill.Color    = Color3.fromRGB(
+                        math.floor(255 * (1 - hp)),
+                        math.floor(220 * hp),
+                        0
+                    )
+                    entry.HealthBarFill.Visible = true
+                else
+                    entry.HealthBarBG.Visible   = false
+                    entry.HealthBarFill.Visible = false
+                end
+
+                -- Tracer (line from screen bottom-center to player feet)
+                if Settings.Tracer then
+                    entry.Tracer.From    = Vector2.new(cx, Camera.ViewportSize.Y)
+                    entry.Tracer.To      = Vector2.new(rootScreen.X, rootScreen.Y)
+                    entry.Tracer.Color   = color
+                    entry.Tracer.Visible = true
+                else
+                    entry.Tracer.Visible = false
+                end
+
+                -- Name + distance + weapon label
                 if Settings.ESP_ShowInfo then
-                    local boxH = entry.Box.Size and entry.Box.Size.Y or 0
-                    entry.Text.Text     = string.format("%s\n[%dm]", target.Name, math.floor(dist))
-                    entry.Text.Position = Vector2.new(screenPos.X, screenPos.Y + boxH / 2 + 5)
+                    local weaponTag = ""
+                    if Settings.WeaponLabel then
+                        local tool = model:FindFirstChildOfClass("Tool")
+                        if tool then weaponTag = "\n[" .. tool.Name .. "]" end
+                    end
+                    entry.Text.Text     = string.format("%s  %dm%s", target.Name, math.floor(dist), weaponTag)
+                    entry.Text.Position = Vector2.new(rootScreen.X, boxTopY + boxHeight + 4)
                     entry.Text.Visible  = true
                 else
                     entry.Text.Visible = false
                 end
 
-                -- "Mostrar Esqueleto" → Show Skeleton
+                -- Skeleton
                 if Settings.ESP_Skeleton then
                     local isR15 = model:FindFirstChild("UpperTorso") ~= nil
                     local bones = isR15 and R15Bones or R6Bones
@@ -1176,15 +1387,19 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- Aimbot (right click) — blocked while menu is open
-    local rmb = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-    if Settings.Aimbot_Enabled and rmb and not ScreenGui.Enabled then
+    -- ── AIMBOT ───────────────────────────────────────────────────
+    local aimActive = IsAimKeyDown()
+    if Settings.Aimbot_Enabled and aimActive and not ScreenGui.Enabled then
         if CurrentTarget and IsVisible(CurrentTarget) then
-            local cf = CFrame.lookAt(Camera.CFrame.Position, CurrentTarget.Position)
+            -- Velocity prediction: lead the target
+            local d3 = (Camera.CFrame.Position - CurrentTarget.Position).Magnitude
+            local vel = CurrentTarget.AssemblyLinearVelocity or Vector3.new()
+            local predicted = CurrentTarget.Position + vel * (d3 / 500)
+            local cf = CFrame.lookAt(Camera.CFrame.Position, predicted)
             Camera.CFrame = Camera.CFrame:Lerp(cf, Settings.Aim_Smoothness)
         else
             CurrentTarget = nil
-            local closest = Settings.FOV_Radius
+            local bestScore = math.huge
             for _, target in ipairs(targets) do
                 local show = (target.IsNPC and Settings.NPC_Enabled) or not target.IsNPC
                 if show then
@@ -1193,24 +1408,30 @@ RunService.RenderStepped:Connect(function()
                     if model and hum and hum.Health > 0 then
                         local part = model:FindFirstChild(Settings.Aim_Part)
                         if part then
-                            local dist = (Camera.CFrame.Position - part.Position).Magnitude
-                            if dist <= Settings.ESP_MaxDistance then
+                            local d = (Camera.CFrame.Position - part.Position).Magnitude
+                            if d <= Settings.ESP_MaxDistance then
                                 local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
                                 if onScreen then
                                     local sd = (Vector2.new(sp.X, sp.Y) - screenCenter).Magnitude
-                                    if sd < closest then
-                                        local params = RaycastParams.new()
-                                        params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
-                                        params.FilterType  = Enum.RaycastFilterType.Exclude
-                                        params.IgnoreWater = true
-                                        local ray = workspace:Raycast(
-                                            Camera.CFrame.Position,
-                                            part.Position - Camera.CFrame.Position,
-                                            params
-                                        )
-                                        if not ray or ray.Instance:IsDescendantOf(model) then
-                                            closest       = sd
-                                            CurrentTarget = part
+                                    if sd < Settings.FOV_Radius then
+                                        -- Priority: FOV = screen distance, Health = lowest HP first
+                                        local score = Settings.Aim_Priority == "Health"
+                                            and hum.Health
+                                            or  sd
+                                        if score < bestScore then
+                                            local params = RaycastParams.new()
+                                            params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+                                            params.FilterType  = Enum.RaycastFilterType.Exclude
+                                            params.IgnoreWater = true
+                                            local ray = workspace:Raycast(
+                                                Camera.CFrame.Position,
+                                                part.Position - Camera.CFrame.Position,
+                                                params
+                                            )
+                                            if not ray or ray.Instance:IsDescendantOf(model) then
+                                                bestScore     = score
+                                                CurrentTarget = part
+                                            end
                                         end
                                     end
                                 end
@@ -1220,13 +1441,140 @@ RunService.RenderStepped:Connect(function()
                 end
             end
             if CurrentTarget then
-                local cf = CFrame.lookAt(Camera.CFrame.Position, CurrentTarget.Position)
+                local d3  = (Camera.CFrame.Position - CurrentTarget.Position).Magnitude
+                local vel = CurrentTarget.AssemblyLinearVelocity or Vector3.new()
+                local predicted = CurrentTarget.Position + vel * (d3 / 500)
+                local cf = CFrame.lookAt(Camera.CFrame.Position, predicted)
                 Camera.CFrame = Camera.CFrame:Lerp(cf, Settings.Aim_Smoothness)
             end
         end
     else
         CurrentTarget = nil
     end
+
+    -- ── NO RECOIL ─────────────────────────────────────────────────
+    -- Compares this frame's camera pitch to last frame's.
+    -- If pitch rose more than mouse delta accounts for → recoil kick → cancel it.
+    if Settings.NoRecoil then
+        if nrPrevCF then
+            local currX, currY, _ = Camera.CFrame:ToOrientation()
+            local prevX,  _,   _ = nrPrevCF:ToOrientation()
+            local mouseDelta      = UserInput:GetMouseDelta()
+            local expectedPitch   = -mouseDelta.Y * 0.0035
+            local recoilKick      = (currX - prevX) - expectedPitch
+            if recoilKick > 0.003 then
+                Camera.CFrame = Camera.CFrame * CFrame.Angles(-recoilKick * 0.85, 0, 0)
+            end
+        end
+        nrPrevCF = Camera.CFrame
+    else
+        nrPrevCF = nil
+    end
+
+    -- ── CROSSHAIR ─────────────────────────────────────────────────
+    if Settings.Crosshair_Enabled then
+        local gap  = 4
+        local size = 8
+        if Settings.Crosshair_Style == "Cross" then
+            CrosshairDot.Visible = false
+            local segs = {
+                {Vector2.new(cx - gap - size, cy), Vector2.new(cx - gap, cy)},
+                {Vector2.new(cx + gap, cy),        Vector2.new(cx + gap + size, cy)},
+                {Vector2.new(cx, cy - gap - size), Vector2.new(cx, cy - gap)},
+                {Vector2.new(cx, cy + gap),        Vector2.new(cx, cy + gap + size)},
+            }
+            for i, seg in ipairs(segs) do
+                CrosshairLines[i].From    = seg[1]
+                CrosshairLines[i].To      = seg[2]
+                CrosshairLines[i].Visible = true
+            end
+        elseif Settings.Crosshair_Style == "Dot" then
+            for _, l in ipairs(CrosshairLines) do l.Visible = false end
+            CrosshairDot.Radius   = 2
+            CrosshairDot.Filled   = true
+            CrosshairDot.Position = Vector2.new(cx, cy)
+            CrosshairDot.Visible  = true
+        elseif Settings.Crosshair_Style == "Circle" then
+            for _, l in ipairs(CrosshairLines) do l.Visible = false end
+            CrosshairDot.Radius    = 20
+            CrosshairDot.Filled    = false
+            CrosshairDot.Thickness = 1.5
+            CrosshairDot.Position  = Vector2.new(cx, cy)
+            CrosshairDot.Visible   = true
+        end
+    else
+        for _, l in ipairs(CrosshairLines) do l.Visible = false end
+        CrosshairDot.Visible = false
+    end
+
+    -- ── RADAR ─────────────────────────────────────────────────────
+    if Settings.Radar_Enabled then
+        RadarFrame.Visible = true
+        local RADAR_SIZE  = 180
+        local RADAR_RANGE = 300
+        local localRoot   = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local dotIdx = 0
+        if localRoot then
+            local _, camYaw, _ = Camera.CFrame:ToOrientation()
+            for _, target in ipairs(targets) do
+                local model = target.Model
+                local tRoot = model:FindFirstChild("HumanoidRootPart")
+                local tHum  = model:FindFirstChildOfClass("Humanoid")
+                if tRoot and tHum and tHum.Health > 0 then
+                    local diff   = tRoot.Position - localRoot.Position
+                    local dist2D = Vector2.new(diff.X, diff.Z).Magnitude
+                    if dist2D < RADAR_RANGE then
+                        dotIdx = dotIdx + 1
+                        if dotIdx <= RADAR_MAX_DOTS then
+                            local dot    = RadarDots[dotIdx]
+                            local angle  = math.atan2(diff.X, diff.Z) - camYaw
+                            local scaled = (dist2D / RADAR_RANGE) * (RADAR_SIZE / 2 - 10)
+                            local dotX   = 0.5 + math.sin(angle) * scaled / RADAR_SIZE
+                            local dotY   = 0.5 - math.cos(angle) * scaled / RADAR_SIZE
+                            dot.Position = UDim2.new(dotX, -3, dotY, -3)
+                            local plr = Players:GetPlayerFromCharacter(model)
+                            local isTm = plr and LocalPlayer.Team and plr.Team == LocalPlayer.Team
+                            dot.BackgroundColor3 = isTm
+                                and Color3.fromRGB(0, 220, 80)
+                                or  Color3.fromRGB(255, 50, 50)
+                            dot.Visible = true
+                        end
+                    end
+                end
+            end
+        end
+        for i = dotIdx + 1, RADAR_MAX_DOTS do RadarDots[i].Visible = false end
+    else
+        RadarFrame.Visible = false
+        for _, dot in ipairs(RadarDots) do dot.Visible = false end
+    end
+
+    -- ── LOOT ESP ──────────────────────────────────────────────────
+    if Settings.Loot_Enabled then
+        local lootIdx = 0
+        for _, tool in ipairs(LootObjects) do
+            if tool and tool.Parent then
+                local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildOfClass("BasePart")
+                if handle then
+                    local sp, onScreen = Camera:WorldToViewportPoint(handle.Position)
+                    local ld = (Camera.CFrame.Position - handle.Position).Magnitude
+                    if onScreen and ld <= Settings.ESP_MaxDistance then
+                        lootIdx = lootIdx + 1
+                        if lootIdx <= LOOT_MAX then
+                            local lbl    = LootLabels[lootIdx]
+                            lbl.Text     = "◆ " .. tool.Name
+                            lbl.Position = Vector2.new(sp.X, sp.Y)
+                            lbl.Visible  = true
+                        end
+                    end
+                end
+            end
+        end
+        for i = lootIdx + 1, LOOT_MAX do LootLabels[i].Visible = false end
+    else
+        for _, lbl in ipairs(LootLabels) do lbl.Visible = false end
+    end
+
 end)
 
 -- ============================================================
