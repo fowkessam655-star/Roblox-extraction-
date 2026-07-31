@@ -705,6 +705,7 @@ end
 local AimbotTab  = CreateTab("Aimbot",  "◎")
 local VisualsTab = CreateTab("Visuals", "◈")
 local SettingsTab= CreateTab("Settings","⚙")
+local ConfigTab  = CreateTab("Config",  "◧")
 local DumpTab    = CreateTab("Dump",    "◉")
 
 -- ── AIMBOT TAB ──────────────────────────────────────────────
@@ -1075,6 +1076,232 @@ dangerInfo.TextXAlignment     = Enum.TextXAlignment.Left
 dangerInfo.TextWrapped        = true
 dangerInfo.Text               = "Eject unloads Aura completely. Reinject mid-match is safe."
 local ejectBtn = CreateButton(dangerSection, "⏏  EJECT AURA", Color3.fromRGB(180, 40, 40), function() end)
+
+-- ── CONFIG TAB ───────────────────────────────────────────────
+local HttpService = game:GetService("HttpService")
+local CFG_FOLDER  = "Aura"
+local CFG_EXT     = ".json"
+
+-- Keys in Settings that get saved/loaded
+local CFG_KEYS = {
+    "Aimbot_Enabled","FOV_Radius","FOV_Circle","Aim_Part","Aim_Smoothness",
+    "Aim_Key","Aim_Priority","NoRecoil","NoSway",
+    "ESP_Enabled","NPC_Enabled","ESP_Type","ESP_ShowInfo","ESP_Skeleton",
+    "ESP_MaxDistance","HealthBar","Tracer","WeaponLabel",
+    "Loot_Enabled","Best_Loot_Only","Radar_Enabled",
+    "Crosshair_Enabled","Crosshair_Style",
+}
+
+local function CfgSave(name)
+    local t = {}
+    for _, k in ipairs(CFG_KEYS) do t[k] = Settings[k] end
+    local ok, json = pcall(function() return HttpService:JSONEncode(t) end)
+    if not ok then return false, "encode failed" end
+    local wok = pcall(function()
+        if not isfolder(CFG_FOLDER) then makefolder(CFG_FOLDER) end
+        writefile(CFG_FOLDER .. "/" .. name .. CFG_EXT, json)
+    end)
+    return wok, wok and "saved" or "write failed (executor may not support files)"
+end
+
+local function CfgLoad(name)
+    local content
+    local rok = pcall(function()
+        content = readfile(CFG_FOLDER .. "/" .. name .. CFG_EXT)
+    end)
+    if not rok or not content then return false, "file not found" end
+    local ok, t = pcall(function() return HttpService:JSONDecode(content) end)
+    if not ok or type(t) ~= "table" then return false, "decode failed" end
+    for _, k in ipairs(CFG_KEYS) do
+        if t[k] ~= nil then Settings[k] = t[k] end
+    end
+    return true, "loaded"
+end
+
+local function CfgDelete(name)
+    pcall(function() delfile(CFG_FOLDER .. "/" .. name .. CFG_EXT) end)
+end
+
+local function CfgList()
+    local names = {}
+    pcall(function()
+        if not isfolder(CFG_FOLDER) then return end
+        for _, path in ipairs(listfiles(CFG_FOLDER)) do
+            local n = path:match("([^/\\]+)" .. CFG_EXT .. "$")
+            if n then table.insert(names, n) end
+        end
+    end)
+    return names
+end
+
+-- ── UI ───────────────────────────────────────────────────────
+local cfgNameSection = CreateSection(ConfigTab, "Config Name")
+
+local nameBoxRow = Instance.new("Frame", cfgNameSection)
+nameBoxRow.Size                = UDim2.new(1, 0, 0, 28)
+nameBoxRow.BackgroundTransparency = 1
+
+local nameBox = Instance.new("TextBox", nameBoxRow)
+nameBox.Size                = UDim2.new(1, 0, 1, 0)
+nameBox.BackgroundColor3    = Colors.BG4
+nameBox.TextColor3          = Colors.White
+nameBox.PlaceholderText     = "enter config name..."
+nameBox.PlaceholderColor3   = Colors.Gray1
+nameBox.Font                = Enum.Font.Gotham
+nameBox.TextSize             = 12
+nameBox.Text                = ""
+nameBox.ClearTextOnFocus    = false
+nameBox.BorderSizePixel     = 0
+Instance.new("UICorner", nameBox).CornerRadius = UDim.new(0, 6)
+local nbStroke = Instance.new("UIStroke", nameBox)
+nbStroke.Color     = Colors.Border
+nbStroke.Thickness = 1
+local nbPad = Instance.new("UIPadding", nameBox)
+nbPad.PaddingLeft  = UDim.new(0, 8)
+nbPad.PaddingRight = UDim.new(0, 8)
+
+-- Focus/unfocus styling
+nameBox.Focused:Connect(function()
+    TweenService:Create(nbStroke, TweenInfo.new(0.1), {Color = Colors.Accent}):Play()
+end)
+nameBox.FocusLost:Connect(function()
+    TweenService:Create(nbStroke, TweenInfo.new(0.1), {Color = Colors.Border}):Play()
+    -- Sanitise: strip everything except letters, digits, underscore, hyphen
+    nameBox.Text = nameBox.Text:gsub("[^%w_%-]", ""):sub(1, 32)
+end)
+
+local cfgStatus = Instance.new("TextLabel", cfgNameSection)
+cfgStatus.Size               = UDim2.new(1, 0, 0, 18)
+cfgStatus.BackgroundTransparency = 1
+cfgStatus.TextColor3         = Colors.Gray1
+cfgStatus.Font               = Enum.Font.Gotham
+cfgStatus.TextSize           = 11
+cfgStatus.TextXAlignment     = Enum.TextXAlignment.Left
+cfgStatus.Text               = ""
+
+local function SetStatus(msg, isErr)
+    cfgStatus.Text       = msg
+    cfgStatus.TextColor3 = isErr and Colors.Red or Colors.Green
+    task.delay(3, function()
+        if cfgStatus.Text == msg then
+            TweenService:Create(cfgStatus, TweenInfo.new(0.4), {TextTransparency = 1}):Play()
+            task.delay(0.4, function() cfgStatus.Text = "" cfgStatus.TextTransparency = 0 end)
+        end
+    end)
+end
+
+-- forward declare so save button can call it
+local RefreshCfgList
+
+CreateButton(cfgNameSection, "💾  SAVE CONFIG", Colors.Accent, function()
+    local name = nameBox.Text
+    if name == "" then SetStatus("enter a name first", true) return end
+    local ok, msg = CfgSave(name)
+    SetStatus(ok and ("saved  →  " .. name) or msg, not ok)
+    if ok and RefreshCfgList then RefreshCfgList() end
+end)
+
+-- ── SAVED CONFIGS LIST ───────────────────────────────────────
+local cfgListSection = CreateSection(ConfigTab, "Saved Configs")
+
+local cfgScroll = Instance.new("ScrollingFrame", cfgListSection)
+cfgScroll.Size                  = UDim2.new(1, 0, 0, 180)
+cfgScroll.BackgroundColor3      = Colors.BG0
+cfgScroll.BorderSizePixel       = 0
+cfgScroll.ScrollBarThickness    = 3
+cfgScroll.ScrollBarImageColor3  = Colors.Accent
+cfgScroll.CanvasSize            = UDim2.new(0, 0, 0, 0)
+Instance.new("UICorner", cfgScroll).CornerRadius = UDim.new(0, 6)
+local cfgLayout = Instance.new("UIListLayout", cfgScroll)
+cfgLayout.SortOrder   = Enum.SortOrder.LayoutOrder
+cfgLayout.Padding     = UDim.new(0, 3)
+local cfgScrollPad = Instance.new("UIPadding", cfgScroll)
+cfgScrollPad.PaddingTop    = UDim.new(0, 5)
+cfgScrollPad.PaddingBottom = UDim.new(0, 5)
+cfgScrollPad.PaddingLeft   = UDim.new(0, 5)
+cfgScrollPad.PaddingRight  = UDim.new(0, 5)
+
+cfgLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    cfgScroll.CanvasSize = UDim2.new(0, 0, 0, cfgLayout.AbsoluteContentSize.Y + 10)
+end)
+
+RefreshCfgList = function()
+    for _, c in ipairs(cfgScroll:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    local names = CfgList()
+    if #names == 0 then
+        local empty = Instance.new("TextLabel", cfgScroll)
+        empty.Size               = UDim2.new(1, 0, 0, 28)
+        empty.BackgroundTransparency = 1
+        empty.TextColor3         = Colors.Gray1
+        empty.Font               = Enum.Font.Gotham
+        empty.TextSize           = 11
+        empty.Text               = "no configs saved yet"
+        return
+    end
+    for _, cfgName in ipairs(names) do
+        local row = Instance.new("Frame", cfgScroll)
+        row.Size             = UDim2.new(1, 0, 0, 30)
+        row.BackgroundColor3 = Colors.BG3
+        row.BorderSizePixel  = 0
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
+
+        local nameLabel = Instance.new("TextLabel", row)
+        nameLabel.Size               = UDim2.new(1, -90, 1, 0)
+        nameLabel.Position           = UDim2.new(0, 10, 0, 0)
+        nameLabel.BackgroundTransparency = 1
+        nameLabel.TextColor3         = Colors.White
+        nameLabel.Font               = Enum.Font.GothamSemibold
+        nameLabel.TextSize           = 11
+        nameLabel.TextXAlignment     = Enum.TextXAlignment.Left
+        nameLabel.Text               = cfgName
+        nameLabel.TextTruncate       = Enum.TextTruncate.AtEnd
+
+        -- LOAD button
+        local loadBtn = Instance.new("TextButton", row)
+        loadBtn.Size             = UDim2.new(0, 38, 0, 20)
+        loadBtn.AnchorPoint      = Vector2.new(1, 0.5)
+        loadBtn.Position         = UDim2.new(1, -46, 0.5, 0)
+        loadBtn.BackgroundColor3 = Colors.Accent
+        loadBtn.TextColor3       = Color3.fromRGB(255,255,255)
+        loadBtn.Font             = Enum.Font.GothamBold
+        loadBtn.TextSize         = 10
+        loadBtn.Text             = "LOAD"
+        loadBtn.AutoButtonColor  = false
+        Instance.new("UICorner", loadBtn).CornerRadius = UDim.new(0, 4)
+        loadBtn.MouseButton1Click:Connect(function()
+            local ok, msg = CfgLoad(cfgName)
+            SetStatus(ok and ("loaded  →  " .. cfgName) or msg, not ok)
+        end)
+
+        -- DELETE button
+        local delBtn = Instance.new("TextButton", row)
+        delBtn.Size             = UDim2.new(0, 30, 0, 20)
+        delBtn.AnchorPoint      = Vector2.new(1, 0.5)
+        delBtn.Position         = UDim2.new(1, -4, 0.5, 0)
+        delBtn.BackgroundColor3 = Color3.fromRGB(160, 30, 30)
+        delBtn.TextColor3       = Color3.fromRGB(255,255,255)
+        delBtn.Font             = Enum.Font.GothamBold
+        delBtn.TextSize         = 10
+        delBtn.Text             = "✕"
+        delBtn.AutoButtonColor  = false
+        Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 4)
+        delBtn.MouseButton1Click:Connect(function()
+            CfgDelete(cfgName)
+            SetStatus("deleted  →  " .. cfgName, false)
+            RefreshCfgList()
+        end)
+    end
+end
+
+-- Refresh button
+CreateButton(cfgListSection, "↺  REFRESH LIST", Colors.BG4, function()
+    RefreshCfgList()
+end)
+
+-- Initial populate
+RefreshCfgList()
 
 -- ── DUMP TAB ────────────────────────────────────────────────
 local dumpSection = CreateSection(DumpTab, "Offset Dumper")
