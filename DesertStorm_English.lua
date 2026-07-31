@@ -1633,16 +1633,17 @@ end
 -- ============================================================
 -- TOGGLE GUI  [INSERT] or [RSHIFT]  (verified from original info text)
 -- ============================================================
-UserInput.InputBegan:Connect(function(input, gameProcessed)
-    if not gameProcessed then
-        if input.KeyCode == Enum.KeyCode.Insert
-        or input.KeyCode == Enum.KeyCode.RightShift then
-            ScreenGui.Enabled = not ScreenGui.Enabled
-            if ScreenGui.Enabled then
-                ApplyMenuLock()
-            else
-                RemoveMenuLock()
-            end
+-- INSERT / RSHIFT always fires — no gameProcessed guard.
+-- When the menu is open and cursor is free, Roblox marks all keypresses
+-- as gameProcessed (UI has focus), which would silently block the close key.
+UserInput.InputBegan:Connect(function(input, _gameProcessed)
+    if input.KeyCode == Enum.KeyCode.Insert
+    or input.KeyCode == Enum.KeyCode.RightShift then
+        ScreenGui.Enabled = not ScreenGui.Enabled
+        if ScreenGui.Enabled then
+            ApplyMenuLock()
+        else
+            RemoveMenuLock()
         end
     end
 end)
