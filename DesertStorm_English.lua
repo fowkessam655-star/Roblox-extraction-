@@ -54,8 +54,8 @@ local Settings = {
     FOV_Radius      = 1500,
     Aim_Part        = "Head",
     Aim_Smoothness  = 0.2,
-    Aim_Key         = "Right Click",   -- "Right Click" | "CapsLock" | "F" | "V"
-    Aim_Priority    = "FOV",           -- "FOV" | "Health"
+    Aim_Key         = "Right Click",
+    Aim_Priority    = "FOV",
     NoRecoil        = false,
     -- esp
     ESP_Enabled     = false,
@@ -68,11 +68,33 @@ local Settings = {
     Tracer          = false,
     WeaponLabel     = true,
     Loot_Enabled    = false,
+    Best_Loot_Only  = false,   -- only show S/A tier weapons in loot ESP
     Radar_Enabled   = false,
     -- visuals
     Crosshair_Enabled = false,
-    Crosshair_Style   = "Cross",      -- "Cross" | "Dot" | "Circle"
+    Crosshair_Style   = "Cross",
 }
+
+-- ============================================================
+-- HIGH VALUE LOOT TIER TABLE  (weapon names from official tier list)
+-- ============================================================
+local HighValueLoot = {
+    -- S tier → gold label
+    ["AK-74M"]   = "S", ["M4A1"]  = "S", ["SV-98"] = "S", ["MPX"]      = "S",
+    -- A tier → orange label
+    ["AKM"]      = "A", ["AK-101"]= "A", ["HK416"] = "A", ["SR-25"]    = "A",
+    ["VSS"]      = "A", ["MP5SD"] = "A", ["Saiga"] = "A",
+    -- always show keycards / quest items regardless of Best_Loot_Only
+    ["Keycard"]  = "S", ["Key Card"]= "S", ["Access Card"]= "S",
+    ["Card"]     = "S", ["Key"]   = "S",
+}
+
+local function GetLootTier(name)
+    for substr, tier in pairs(HighValueLoot) do
+        if name:find(substr) then return tier end
+    end
+    return nil
+end
 
 -- ============================================================
 -- NPC TRACKING
@@ -494,6 +516,38 @@ local function CreateDropdown(parent, label, options, defaultIndex, callback)
 end
 
 -- ============================================================
+-- BUTTON BUILDER
+-- ============================================================
+local function CreateButton(parent, label, color, callback)
+    local btn = Instance.new("TextButton", parent)
+    btn.Size            = UDim2.new(1, -24, 0, 28)
+    btn.BackgroundColor3 = color or Colors.Accent
+    btn.Text            = label
+    btn.TextColor3      = Color3.fromRGB(255, 255, 255)
+    btn.Font            = Enum.Font.GothamBold
+    btn.TextSize        = 12
+    btn.AutoButtonColor = false
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+    -- hover tint
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.12), {
+            BackgroundColor3 = Color3.fromRGB(
+                math.min(255, (color or Colors.Accent).R * 255 + 20),
+                math.min(255, (color or Colors.Accent).G * 255 + 20),
+                math.min(255, (color or Colors.Accent).B * 255 + 20)
+            )
+        }):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.12), {
+            BackgroundColor3 = color or Colors.Accent
+        }):Play()
+    end)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+-- ============================================================
 -- BUILD TABS  (verified names: Aimbot, Visuals, Ajustes→Settings)
 -- ============================================================
 local AimbotTab  = CreateTab("Aimbot",  "◎")
@@ -575,8 +629,9 @@ local overlaysSection = CreateSection(VisualsTab, "Overlays")
 CreateToggle(overlaysSection, "Health Bars",   Settings.HealthBar,    function(v) Settings.HealthBar    = v end)
 CreateToggle(overlaysSection, "Tracers",       Settings.Tracer,       function(v) Settings.Tracer       = v end)
 CreateToggle(overlaysSection, "Weapon Label",  Settings.WeaponLabel,  function(v) Settings.WeaponLabel  = v end)
-CreateToggle(overlaysSection, "Loot ESP",      Settings.Loot_Enabled, function(v) Settings.Loot_Enabled = v end)
-CreateToggle(overlaysSection, "Radar",         Settings.Radar_Enabled,function(v) Settings.Radar_Enabled= v end)
+CreateToggle(overlaysSection, "Loot ESP",      Settings.Loot_Enabled,   function(v) Settings.Loot_Enabled  = v end)
+CreateToggle(overlaysSection, "Best Loot Only",Settings.Best_Loot_Only, function(v) Settings.Best_Loot_Only = v end)
+CreateToggle(overlaysSection, "Radar",         Settings.Radar_Enabled,  function(v) Settings.Radar_Enabled = v end)
 
 -- Section: "Crosshair"
 local crosshairSection = CreateSection(VisualsTab, "Crosshair")
@@ -685,6 +740,99 @@ end
 
 CreateToggle(visualSettingsSection, "Full Bright", false, function(v)
     SetFullbright(v)
+end)
+
+-- ── FORCE EXTRACT ────────────────────────────────────────────
+local extractSection = CreateSection(SettingsTab, "Extraction")
+
+-- Status label
+local extractStatus = Instance.new("TextLabel", extractSection)
+extractStatus.Size               = UDim2.new(1, -12, 0, 32)
+extractStatus.BackgroundTransparency = 1
+extractStatus.TextColor3         = Colors.Gray1
+extractStatus.Font               = Enum.Font.Gotham
+extractStatus.TextSize           = 11
+extractStatus.TextXAlignment     = Enum.TextXAlignment.Left
+extractStatus.TextWrapped        = true
+extractStatus.Text               = "Finds extract zone → teleports you in.\nKeybind: [END]"
+
+local extractBtn   = CreateButton(extractSection, "▶  FORCE EXTRACT", Colors.Accent, function() end)
+local leaveBtn     = CreateButton(extractSection, "✕  LEAVE SERVER",  Color3.fromRGB(140, 30, 30), function() end)
+
+-- ── FORCE EXTRACT LOGIC ──────────────────────────────────────
+-- Priority order:
+--   1. Teleport root into extract zone Part (triggers server-side zone overlap)
+--   2. Fire any RemoteEvent in ReplicatedStorage named like "extract"/"exfil"
+--   3. TeleportService to fresh server (loot saved via game backend)
+--   4. Kick as nuclear fallback
+local function ForceExtract()
+    extractBtn.Text = "searching..."
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then
+        extractStatus.Text = "no character — try again in raid"
+        extractBtn.Text    = "▶  FORCE EXTRACT"
+        return
+    end
+
+    -- 1: Find extract zone Part in workspace by name pattern
+    local extractPart = nil
+    local patterns    = {"extract", "exfil", "exzone", "exitzone", "escapezon", "extractpoint"}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Part") or obj:IsA("UnionOperation") then
+            local n = obj.Name:lower()
+            for _, pat in ipairs(patterns) do
+                if n:find(pat) then
+                    extractPart = obj
+                    break
+                end
+            end
+            if extractPart then break end
+        end
+    end
+
+    if extractPart then
+        -- Teleport into the zone (+ 3 studs up so we land on top, not inside)
+        root.CFrame = extractPart.CFrame * CFrame.new(0, 3, 0)
+        extractStatus.Text = "teleported to: " .. extractPart.Name
+        extractBtn.Text    = "▶  FORCE EXTRACT"
+        return
+    end
+
+    -- 2: Fire any extract-named RemoteEvent in ReplicatedStorage
+    local RS = game:GetService("ReplicatedStorage")
+    local fired = false
+    for _, obj in ipairs(RS:GetDescendants()) do
+        if obj:IsA("RemoteEvent") then
+            local n = obj.Name:lower()
+            if n:find("extract") or n:find("exfil") or n:find("exit") or n:find("leave") then
+                pcall(function() obj:FireServer() end)
+                extractStatus.Text = "fired: " .. obj.Name
+                fired = true
+            end
+        end
+    end
+    if fired then
+        extractBtn.Text = "▶  FORCE EXTRACT"
+        return
+    end
+
+    -- 3: TeleportService — lands in fresh server, game backend handles loot
+    extractStatus.Text = "no zone found — rejoining server..."
+    extractBtn.Text    = "rejoining..."
+    local ok = pcall(function()
+        game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer)
+    end)
+    if not ok then
+        -- 4: Nuclear fallback
+        task.wait(0.4)
+        LocalPlayer:Kick("[Aura] Force Extracted")
+    end
+end
+
+extractBtn.MouseButton1Click:Connect(ForceExtract)
+leaveBtn.MouseButton1Click:Connect(function()
+    LocalPlayer:Kick("[Aura] Left Server")
 end)
 
 -- ── DUMP TAB ────────────────────────────────────────────────
@@ -1558,12 +1706,24 @@ RunService.RenderStepped:Connect(function()
                     local sp, onScreen = Camera:WorldToViewportPoint(handle.Position)
                     local ld = (Camera.CFrame.Position - handle.Position).Magnitude
                     if onScreen and ld <= Settings.ESP_MaxDistance then
-                        lootIdx = lootIdx + 1
-                        if lootIdx <= LOOT_MAX then
-                            local lbl    = LootLabels[lootIdx]
-                            lbl.Text     = "◆ " .. tool.Name
-                            lbl.Position = Vector2.new(sp.X, sp.Y)
-                            lbl.Visible  = true
+                        -- Tier check
+                        local tier = GetLootTier(tool.Name)
+                        -- If Best_Loot_Only is on, skip items with no tier
+                        if Settings.Best_Loot_Only and not tier then
+                            -- skip
+                        else
+                            lootIdx = lootIdx + 1
+                            if lootIdx <= LOOT_MAX then
+                                local lbl = LootLabels[lootIdx]
+                                -- S = gold, A = orange, unknown = white
+                                lbl.Color = tier == "S" and Color3.fromRGB(255, 215, 0)
+                                         or tier == "A" and Color3.fromRGB(255, 140, 0)
+                                         or Color3.fromRGB(200, 200, 200)
+                                local badge = tier and ("[" .. tier .. "] ") or ""
+                                lbl.Text     = "◆ " .. badge .. tool.Name
+                                lbl.Position = Vector2.new(sp.X, sp.Y)
+                                lbl.Visible  = true
+                            end
                         end
                     end
                 end
@@ -1636,6 +1796,7 @@ end
 -- When the menu is open and cursor is free, Roblox marks all keypresses
 -- as gameProcessed (UI has focus), which would silently block the close key.
 UserInput.InputBegan:Connect(function(input, _gameProcessed)
+    -- Menu toggle — always fires regardless of UI focus
     if input.KeyCode == Enum.KeyCode.Insert
     or input.KeyCode == Enum.KeyCode.RightShift then
         ScreenGui.Enabled = not ScreenGui.Enabled
@@ -1644,5 +1805,9 @@ UserInput.InputBegan:Connect(function(input, _gameProcessed)
         else
             RemoveMenuLock()
         end
+    end
+    -- Force extract keybind [END]
+    if input.KeyCode == Enum.KeyCode.End then
+        ForceExtract()
     end
 end)
