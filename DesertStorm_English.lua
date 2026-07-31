@@ -1823,7 +1823,16 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
                 local show = (target.IsNPC and Settings.NPC_Enabled) or not target.IsNPC
                 if show then
                     local model = target.Model
-                    local hum   = model:FindFirstChildOfClass("Humanoid")
+
+                    -- Skip teammates
+                    if not target.IsNPC then
+                        local plr = Players:GetPlayerFromCharacter(model)
+                        if plr and LocalPlayer.Team and plr.Team == LocalPlayer.Team then
+                            continue
+                        end
+                    end
+
+                    local hum = model:FindFirstChildOfClass("Humanoid")
                     if model and hum and hum.Health > 0 then
                         local part = model:FindFirstChild(Settings.Aim_Part)
                         if part then
