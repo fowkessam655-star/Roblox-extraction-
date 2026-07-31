@@ -847,15 +847,26 @@ end
 local fullbrightConn = nil
 local speedHackConn  = nil
 
--- Speed hack enforcer — runs every Heartbeat and keeps WalkSpeed set
--- since most games reset it via their own Heartbeat/Stepped loop.
-speedHackConn = RunService.Heartbeat:Connect(function()
+-- Speed hack — velocity injection via AssemblyLinearVelocity.
+-- Avoids changing WalkSpeed (server knows the default and rejects fast positions).
+-- Instead we push the HumanoidRootPart in Humanoid.MoveDirection every Stepped
+-- (client physics step, before server sees it).
+-- Extra velocity = (SpeedValue - 16) * moveDir, so at SpeedValue=16 it does nothing.
+speedHackConn = RunService.Stepped:Connect(function()
     if not Settings.SpeedHack then return end
     local char = LocalPlayer.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     local hum  = char and char:FindFirstChildOfClass("Humanoid")
-    if hum and hum.WalkSpeed ~= Settings.SpeedValue then
-        hum.WalkSpeed = Settings.SpeedValue
-    end
+    if not hrp or not hum then return end
+    local moveDir = hum.MoveDirection
+    if moveDir.Magnitude < 0.1 then return end  -- standing still — don't inject
+    local extra = (Settings.SpeedValue - 16)
+    if extra <= 0 then return end
+    hrp.AssemblyLinearVelocity = Vector3.new(
+        moveDir.X * Settings.SpeedValue,
+        hrp.AssemblyLinearVelocity.Y,  -- preserve vertical (gravity/jumping)
+        moveDir.Z * Settings.SpeedValue
+    )
 end)
 
 local function SetFullbright(enabled)
@@ -918,14 +929,16 @@ end)
 
 -- ── MOVEMENT ─────────────────────────────────────────────────
 local movementSection = CreateSection(SettingsTab, "Movement")
+local speedInfo = Instance.new("TextLabel", movementSection)
+speedInfo.Size               = UDim2.new(1, -12, 0, 18)
+speedInfo.BackgroundTransparency = 1
+speedInfo.TextColor3         = Colors.Gray1
+speedInfo.Font               = Enum.Font.Gotham
+speedInfo.TextSize           = 11
+speedInfo.TextXAlignment     = Enum.TextXAlignment.Left
+speedInfo.Text               = "Keybind: [H]"
 CreateToggle(movementSection, "Speed Hack", Settings.SpeedHack, function(v)
     Settings.SpeedHack = v
-    if not v then
-        -- Restore default speed on toggle off
-        local char = LocalPlayer.Character
-        local hum  = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.WalkSpeed = 16 end
-    end
 end)
 CreateSlider(movementSection, "Speed", 16, 250, Settings.SpeedValue, function(v)
     Settings.SpeedValue = v
@@ -2440,6 +2453,10 @@ UserInput.InputBegan:Connect(function(input, _gameProcessed)
     if input.KeyCode == Enum.KeyCode.End then
         ForceExtract()
     end
+    -- Speed hack toggle [H]
+    if input.KeyCode == Enum.KeyCode.H then
+        Settings.SpeedHack = not Settings.SpeedHack
+    end
 end)
 
 -- ============================================================
@@ -2469,16 +2486,11 @@ EjectAura = function()
         fullbrightConn = nil
     end
 
-    -- Kill speed hack enforcer + restore default speed
+    -- Kill speed hack enforcer
     if speedHackConn then
         speedHackConn:Disconnect()
         speedHackConn = nil
     end
-    pcall(function()
-        local char = LocalPlayer.Character
-        local hum  = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.WalkSpeed = 16 end
-    end)
 
     -- Restore mouse + lighting
     pcall(function() UserInput.MouseBehavior = Enum.MouseBehavior.LockCenter end)
