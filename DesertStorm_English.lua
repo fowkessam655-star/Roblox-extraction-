@@ -832,19 +832,21 @@ FOVCircle.Color     = Colors.Accent
 FOVCircle.Filled    = false
 
 local function CreateESPEntry(model)
+    local hl = Instance.new("Highlight")
+    hl.FillTransparency    = 0.5
+    hl.OutlineTransparency = 0.1
+
     local entry = {
-        Box       = NewDrawing("Square"),
-        Text      = NewDrawing("Text"),
-        Skeleton  = {},
-        Highlight = Instance.new("SelectionBox"),
+        Box      = NewDrawing("Square"),
+        Text     = NewDrawing("Text"),
+        Skeleton = {},
+        Highlight = hl,
     }
-    entry.Box.Thickness               = 1.5
-    entry.Box.Filled                  = false
-    entry.Text.Size                   = 13
-    entry.Text.Center                 = true
-    entry.Text.Outline                = true
-    entry.Highlight.FillTransparency  = 0.5
-    entry.Highlight.OutlineTransparency = 0.1
+    entry.Box.Thickness = 1.5
+    entry.Box.Filled    = false
+    entry.Text.Size     = 13
+    entry.Text.Center   = true
+    entry.Text.Outline  = true
     for i = 1, 12 do
         local bone = NewDrawing("Line")
         bone.Thickness = 1.5
@@ -983,26 +985,26 @@ RunService.RenderStepped:Connect(function()
             local color = target.IsNPC and Colors.Orange or Colors.Accent
 
             if dist <= Settings.ESP_MaxDistance and onScreen then
-                entry.Box.Color               = color
-                entry.Text.Color              = color
-                entry.Highlight.FillColor     = color
-                entry.Highlight.OutlineColor  = Colors.Green
+                entry.Box.Color              = color
+                entry.Text.Color             = color
+                entry.Highlight.FillColor    = color
+                entry.Highlight.OutlineColor = Colors.Green
 
                 for _, bone in ipairs(entry.Skeleton) do bone.Color = color end
 
-                -- ESP_Type: "Full" = Highlight, "2D Box" = Box
+                -- "Full" = Highlight overlay, "2D Box" = drawn box
                 if Settings.ESP_Type == "Full" then
-                    entry.Box.Visible       = false
-                    entry.Highlight.Parent  = model
-                    entry.Highlight.Adornee = model
+                    entry.Box.Visible        = false
+                    entry.Highlight.Adornee  = model
+                    entry.Highlight.Parent   = workspace
                 else
-                    entry.Highlight.Parent = nil
+                    if entry.Highlight.Parent then entry.Highlight.Parent = nil end
                     local head = model:FindFirstChild("Head")
                     if head then
-                        local topPos    = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-                        local bottomPos = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
-                        local height    = math.abs(topPos.Y - bottomPos.Y)
-                        local width     = height * 0.6
+                        local topPos, _    = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                        local bottomPos, _ = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+                        local height = math.abs(topPos.Y - bottomPos.Y)
+                        local width  = height * 0.6
                         entry.Box.Size     = Vector2.new(width, height)
                         entry.Box.Position = Vector2.new(screenPos.X - width / 2, topPos.Y)
                         entry.Box.Visible  = true
