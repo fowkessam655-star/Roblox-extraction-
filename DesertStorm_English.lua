@@ -1117,17 +1117,27 @@ end)
 -- override it back, which also stops the camera from rotating.
 -- No inputs are sunk so shooting still works normally.
 -- ============================================================
--- Custom GUI cursor — completely bypasses the game's cursor control.
--- An ImageLabel that follows mouse position every frame.
--- No more fighting with MouseIconEnabled.
+-- Custom GUI cursor — bypasses game cursor control entirely.
+-- Tracks position via InputChanged (game-space coords, stretch-res correct)
+-- instead of GetMouseLocation() (OS screen coords, breaks on stretch res).
 local CustomCursor = Instance.new("ImageLabel", ScreenGui)
-CustomCursor.Name             = "AuraCursor"
-CustomCursor.Size             = UDim2.new(0, 18, 0, 18)
+CustomCursor.Name                   = "AuraCursor"
+CustomCursor.Size                   = UDim2.new(0, 18, 0, 18)
 CustomCursor.BackgroundTransparency = 1
-CustomCursor.Image            = "rbxasset://textures/Cursors/KeyboardMouse/ArrowCursor.png"
-CustomCursor.ZIndex           = 999
-CustomCursor.Visible          = false
-CustomCursor.AnchorPoint      = Vector2.new(0, 0)
+CustomCursor.Image                  = "rbxasset://textures/Cursors/KeyboardMouse/ArrowCursor.png"
+CustomCursor.ZIndex                 = 999
+CustomCursor.Visible                = false
+CustomCursor.AnchorPoint            = Vector2.new(0, 0)
+
+-- Track real mouse pos in game-viewport coordinates via InputChanged.
+-- input.Position for MouseMovement is already scaled to the game's
+-- internal resolution, so it works correctly at any stretch res.
+local realMousePos = Vector2.new(0, 0)
+UserInput.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        realMousePos = Vector2.new(input.Position.X, input.Position.Y)
+    end
+end)
 
 local mouseLockConn = nil
 
@@ -1135,13 +1145,12 @@ local function ApplyMenuLock()
     if mouseLockConn then return end
     CustomCursor.Visible = true
     mouseLockConn = RunService.RenderStepped:Connect(function()
-        -- Freeze camera: force Default mouse behavior every frame
+        -- Keep camera frozen
         if UserInput.MouseBehavior ~= Enum.MouseBehavior.Default then
             UserInput.MouseBehavior = Enum.MouseBehavior.Default
         end
-        -- Move our custom cursor to wherever the real mouse is
-        local mousePos = UserInput:GetMouseLocation()
-        CustomCursor.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y)
+        -- Snap cursor to tracked game-space position (stretch-res correct)
+        CustomCursor.Position = UDim2.new(0, realMousePos.X, 0, realMousePos.Y)
     end)
     UserInput.MouseBehavior = Enum.MouseBehavior.Default
 end
