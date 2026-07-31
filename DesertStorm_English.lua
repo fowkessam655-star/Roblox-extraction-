@@ -1580,6 +1580,41 @@ local nrSensEst  = 0.0025 -- rad/pixel estimate, self-calibrates from yaw delta
 local CurrentTarget = nil
 local EjectAura     = nil  -- forward declaration; defined after all GUI is built
 
+-- ── TEAMMATE DETECTION ───────────────────────────────────────
+-- Tries Roblox Teams first, then falls back to common attribute
+-- names used by custom squad/team systems in extraction games.
+local function IsSameTeam(model)
+    local plr = Players:GetPlayerFromCharacter(model)
+    if not plr or plr == LocalPlayer then return false end
+
+    -- 1. Roblox built-in Team service
+    if LocalPlayer.Team ~= nil then
+        return plr.Team == LocalPlayer.Team
+    end
+
+    -- 2. Attribute-based squad (common in custom extraction games)
+    local ATTR_KEYS = {"Team", "Squad", "Group", "Party", "Alliance", "Side", "Faction"}
+    local myChar = LocalPlayer.Character
+    for _, key in ipairs(ATTR_KEYS) do
+        local myVal   = myChar   and myChar:GetAttribute(key)
+        local theirVal= model:GetAttribute(key)
+        if myVal ~= nil and myVal == theirVal then return true end
+        -- Also check on the Player object itself
+        local myPlrVal   = LocalPlayer:GetAttribute(key)
+        local theirPlrVal= plr:GetAttribute(key)
+        if myPlrVal ~= nil and myPlrVal == theirPlrVal then return true end
+    end
+
+    -- 3. IntValue/StringValue named "Team"/"Squad" inside character
+    for _, key in ipairs({"Team", "Squad", "Group", "Party"}) do
+        local myVal    = myChar and myChar:FindFirstChild(key)
+        local theirVal = model:FindFirstChild(key)
+        if myVal and theirVal and myVal.Value == theirVal.Value then return true end
+    end
+
+    return false
+end
+
 -- Frame throttle counters
 local _frame        = 0
 local _raycastCache = {}   -- [model] = cached color from last raycast tick
@@ -1677,8 +1712,7 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
                 color = Colors.Orange
                 _raycastCache[model] = color
             else
-                local plr        = Players:GetPlayerFromCharacter(model)
-                local isTeammate = plr and LocalPlayer.Team and plr.Team == LocalPlayer.Team
+                local isTeammate = IsSameTeam(model)
                 if isTeammate then
                     color = Color3.fromRGB(0, 220, 80)
                     _raycastCache[model] = color
@@ -1838,11 +1872,8 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
                     local model = target.Model
 
                     -- Skip teammates
-                    if not target.IsNPC then
-                        local plr = Players:GetPlayerFromCharacter(model)
-                        if plr and LocalPlayer.Team and plr.Team == LocalPlayer.Team then
-                            continue
-                        end
+                    if not target.IsNPC and IsSameTeam(model) then
+                        continue
                     end
 
                     local hum = model:FindFirstChildOfClass("Humanoid")
