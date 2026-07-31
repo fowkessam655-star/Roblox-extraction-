@@ -52,7 +52,8 @@ local Colors = {
 local Settings = {
     -- aimbot
     Aimbot_Enabled  = true,
-    FOV_Radius      = 1500,
+    FOV_Radius      = 150,
+    FOV_Circle      = true,
     Aim_Part        = "Head",
     Aim_Smoothness  = 0.2,
     Aim_Key         = "Right Click",
@@ -716,8 +717,11 @@ end)
 -- Section: "Configuration"
 local aimbotConfig = CreateSection(AimbotTab, "Configuration")
 -- "Radio FOV" → "FOV Radius"
-CreateSlider(aimbotConfig, "FOV Radius", 30, 800, Settings.FOV_Radius, function(v)
+CreateSlider(aimbotConfig, "FOV Radius", 10, 600, Settings.FOV_Radius, function(v)
     Settings.FOV_Radius = v
+end)
+CreateToggle(aimbotConfig, "FOV Circle", Settings.FOV_Circle, function(v)
+    Settings.FOV_Circle = v
 end)
 -- "Suavizado" → "Smoothness"
 CreateSlider(aimbotConfig, "Smoothness", 1, 100, Settings.Aim_Smoothness * 100, function(v)
@@ -1455,9 +1459,11 @@ end
 local ESPObjects = {}
 
 local FOVCircle = NewDrawing("Circle")
-FOVCircle.Thickness = 1.5
-FOVCircle.Color     = Colors.Accent
-FOVCircle.Filled    = false
+FOVCircle.Thickness  = 1.2
+FOVCircle.Color      = Color3.fromRGB(82, 130, 255)
+FOVCircle.Filled     = false
+FOVCircle.Visible    = false
+FOVCircle.Transparency = 0.35
 
 local function CreateESPEntry(model)
     local hl = Instance.new("Highlight")
@@ -1584,7 +1590,7 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
     _frame = _frame + 1
 
     -- FOV circle
-    if Settings.Aimbot_Enabled then
+    if Settings.Aimbot_Enabled and Settings.FOV_Circle then
         FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
         FOVCircle.Radius   = Settings.FOV_Radius
         FOVCircle.Visible  = true
