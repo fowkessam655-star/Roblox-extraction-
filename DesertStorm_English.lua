@@ -2209,9 +2209,10 @@ end)
 -- Running after the game means our CFrame always wins — mouse input
 -- processed by the game camera script is overwritten every frame.
 -- ============================================================
-local _aimbotLocked = false  -- true while CameraType is Scriptable
-
 RunService:BindToRenderStep("AuraCameraStep", Enum.RenderPriority.Camera.Value + 1, function()
+    -- Camera.CFrame.Position is already correct here — the game's camera script
+    -- (priority 200) just ran and positioned it behind the character.
+    -- We only overwrite the rotation component, so walking works naturally.
     local camPos      = Camera.CFrame.Position
     local vpX, vpY    = Camera.ViewportSize.X, Camera.ViewportSize.Y
     local screenCenter= Vector2.new(vpX / 2, vpY / 2)
@@ -2220,9 +2221,13 @@ RunService:BindToRenderStep("AuraCameraStep", Enum.RenderPriority.Camera.Value +
     local aimActive = IsAimKeyDown()
     if Settings.Aimbot_Enabled and aimActive and not ScreenGui.Enabled then
 
-        -- Validate current target
-        if CurrentTarget and not IsVisible(CurrentTarget) then
-            CurrentTarget = nil
+        -- Drop target if it died, went off screen, or left the world
+        if CurrentTarget then
+            local char = CurrentTarget.Parent
+            local hum  = char and char:FindFirstChildOfClass("Humanoid")
+            if not char or not char.Parent or not hum or hum.Health <= 0 then
+                CurrentTarget = nil
+            end
         end
 
         -- Search for new target if none locked
@@ -2240,8 +2245,8 @@ RunService:BindToRenderStep("AuraCameraStep", Enum.RenderPriority.Camera.Value +
                     local hum  = model:FindFirstChildOfClass("Humanoid")
                     local part = model:FindFirstChild(Settings.Aim_Part)
                     if hum and hum.Health > 0 and part then
-                        local partPos    = part.Position
-                        local d          = (camPos - partPos).Magnitude
+                        local partPos      = part.Position
+                        local d            = (camPos - partPos).Magnitude
                         local sp, onScreen = Camera:WorldToViewportPoint(partPos)
                         if onScreen and d <= Settings.ESP_MaxDistance then
                             local sd = (Vector2.new(sp.X, sp.Y) - screenCenter).Magnitude
@@ -2259,30 +2264,21 @@ RunService:BindToRenderStep("AuraCameraStep", Enum.RenderPriority.Camera.Value +
                     end
                 end
             end
-            -- Also scan NPCs
             if Settings.NPC_Enabled then
                 for model in pairs(NPCTable) do
                     if model and model.Parent then
                         local hum  = model:FindFirstChildOfClass("Humanoid")
                         local part = model:FindFirstChild(Settings.Aim_Part)
                         if hum and hum.Health > 0 and part then
-                            local partPos    = part.Position
-                            local d          = (camPos - partPos).Magnitude
+                            local partPos      = part.Position
+                            local d            = (camPos - partPos).Magnitude
                             local sp, onScreen = Camera:WorldToViewportPoint(partPos)
                             if onScreen and d <= Settings.ESP_MaxDistance then
                                 local sd = (Vector2.new(sp.X, sp.Y) - screenCenter).Magnitude
                                 if sd < Settings.FOV_Radius then
-                                    local score = Settings.Aim_Priority == "Health"
-                                        and (hum and hum.Health or math.huge) or sd
-                                    if score < (math.huge) then
-                                        local rayParams2 = RaycastParams.new()
-                                        rayParams2.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
-                                        rayParams2.FilterType  = Enum.RaycastFilterType.Exclude
-                                        rayParams2.IgnoreWater = true
-                                        local ray = workspace:Raycast(camPos, partPos - camPos, rayParams2)
-                                        if not ray or ray.Instance:IsDescendantOf(model) then
-                                            CurrentTarget = part
-                                        end
+                                    local ray = workspace:Raycast(camPos, partPos - camPos, rayParams)
+                                    if not ray or ray.Instance:IsDescendantOf(model) then
+                                        CurrentTarget = part
                                     end
                                 end
                             end
@@ -2293,23 +2289,17 @@ RunService:BindToRenderStep("AuraCameraStep", Enum.RenderPriority.Camera.Value +
         end
 
         if CurrentTarget then
-            -- Hard lock: set CameraType Scriptable so game stops processing mouse
-            Camera.CameraType = Enum.CameraType.Scriptable
-            _aimbotLocked = true
-            -- Force camera to look exactly at target — no lerp, pure lock
-            local targetPos = CurrentTarget.Position
-            Camera.CFrame   = CFrame.lookAt(camPos, targetPos)
-            return  -- skip no-recoil while locked, camera is fully ours
+            -- Hard rotation lock — position stays game-managed (follows character),
+            -- we only replace the look direction. Mouse input was already written
+            -- by the game camera at priority 200; we stomp it here at 201.
+            Camera.CFrame = CFrame.lookAt(camPos, CurrentTarget.Position)
+            nrPitch = nil  -- don't let no-recoil fight the lock
+            return
         end
     end
 
-    -- Release lock if aim key up / no target / aimbot off
-    if _aimbotLocked then
-        Camera.CameraType = Enum.CameraType.Custom
-        _aimbotLocked     = false
-        CurrentTarget     = nil
-        nrPitch           = nil  -- reset no-recoil pitch so it syncs from new camera angle
-    end
+    -- No target / aim off — clear state
+    CurrentTarget = nil
 
     -- ── NO RECOIL / NO SWAY ──────────────────────────────────────
     -- Same Camera+1 priority guarantees we overwrite the game's camera.
@@ -2434,13 +2424,8 @@ EjectAura = function()
         MainRenderConn = nil
     end
 
-    -- Kill camera override step + restore camera type
+    -- Kill camera override step
     pcall(function() RunService:UnbindFromRenderStep("AuraCameraStep") end)
-    pcall(function()
-        if Camera.CameraType == Enum.CameraType.Scriptable then
-            Camera.CameraType = Enum.CameraType.Custom
-        end
-    end)
 
     -- Kill mouse lock loop
     if mouseLockConn then
