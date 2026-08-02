@@ -77,8 +77,10 @@ local Settings = {
     Tracer          = false,
     WeaponLabel     = true,
     Loot_Enabled    = false,
-    Best_Loot_Only  = false,   -- only show S/A tier weapons in loot ESP
+    Best_Loot_Only  = false,
     Radar_Enabled   = false,
+    RarityESP       = false,
+    RarityMinTier   = 2,       -- 1=Common 2=Uncommon 3=Rare 4=Epic 5=Legendary
     -- visuals
     Crosshair_Enabled = false,
     Crosshair_Style   = "Cross",
@@ -798,6 +800,32 @@ CreateToggle(overlaysSection, "Weapon Label",  Settings.WeaponLabel,  function(v
 CreateToggle(overlaysSection, "Loot ESP",      Settings.Loot_Enabled,   function(v) Settings.Loot_Enabled  = v end)
 CreateToggle(overlaysSection, "Best Loot Only",Settings.Best_Loot_Only, function(v) Settings.Best_Loot_Only = v end)
 CreateToggle(overlaysSection, "Radar",         Settings.Radar_Enabled,  function(v) Settings.Radar_Enabled = v end)
+CreateToggle(overlaysSection, "Rarity ESP",   Settings.RarityESP,      function(v) Settings.RarityESP     = v end)
+
+-- Min Tier picker: Common=1 Uncommon=2 Rare=3 Epic=4 Legendary=5
+do
+    local tierNames = {"Common","Uncommon","Rare","Epic","Legendary"}
+    local tierLabel = CreateLabel and CreateLabel(overlaysSection,
+        "Min Tier: " .. (tierNames[Settings.RarityMinTier] or "Uncommon"))
+    local tierOptions = {}
+    for i, name in ipairs(tierNames) do
+        table.insert(tierOptions, {Name = name, Tier = i})
+    end
+    if CreateDropdown then
+        CreateDropdown(overlaysSection, "Min Rarity Tier", tierNames, tierNames[Settings.RarityMinTier],
+            function(v)
+                for i, name in ipairs(tierNames) do
+                    if name == v then Settings.RarityMinTier = i; break end
+                end
+                if tierLabel then tierLabel.Text = "Min Tier: " .. v end
+            end)
+    elseif CreateSlider then
+        CreateSlider(overlaysSection, "Min Rarity Tier (1-5)", 1, 5, Settings.RarityMinTier, function(v)
+            Settings.RarityMinTier = math.floor(v)
+            if tierLabel then tierLabel.Text = "Min Tier: " .. (tierNames[math.floor(v)] or "?") end
+        end)
+    end
+end
 
 -- Section: "Crosshair"
 local crosshairSection = CreateSection(VisualsTab, "Crosshair")
@@ -1252,6 +1280,7 @@ local CFG_KEYS = {
     "ESP_Enabled","NPC_Enabled","ESP_Type","ESP_ShowInfo","ESP_Skeleton",
     "ESP_MaxDistance","HealthBar","Tracer","WeaponLabel",
     "Loot_Enabled","Best_Loot_Only","Radar_Enabled",
+    "RarityESP","RarityMinTier",
     "Crosshair_Enabled","Crosshair_Style",
     "SpeedHack","SpeedValue","MagicBullet","SilentAim","AntiAFK","FOVValue",
 }
@@ -1832,6 +1861,141 @@ task.spawn(function()
 end)
 
 -- ============================================================
+-- RARITY ESP
+-- Scans workspace for crates / containers with rarity indicators.
+-- Checks BillboardGui text, Attributes, StringValues, Highlight colors,
+-- and model/part names — covers most extraction game formats.
+-- ============================================================
+local RARITY_TIERS = {
+    -- keyword patterns → { tier, label, color }
+    { pattern = "legendary", tier = 5, label = "LEGENDARY", color = Color3.fromRGB(255, 165,  0) },
+    { pattern = "epic",      tier = 4, label = "EPIC",      color = Color3.fromRGB(163,  53, 238) },
+    { pattern = "rare",      tier = 3, label = "RARE",      color = Color3.fromRGB( 50, 150, 255) },
+    { pattern = "uncommon",  tier = 2, label = "UNCOMMON",  color = Color3.fromRGB( 50, 220,  80) },
+    { pattern = "common",    tier = 1, label = "COMMON",    color = Color3.fromRGB(200, 200, 200) },
+    -- fallback colour keys from Highlight
+    { pattern = "gold",      tier = 5, label = "LEGENDARY", color = Color3.fromRGB(255, 215,  0) },
+    { pattern = "purple",    tier = 4, label = "EPIC",      color = Color3.fromRGB(163,  53, 238) },
+    { pattern = "blue",      tier = 3, label = "RARE",      color = Color3.fromRGB( 50, 150, 255) },
+    { pattern = "green",     tier = 2, label = "UNCOMMON",  color = Color3.fromRGB( 50, 220,  80) },
+}
+
+local RARITY_ATTR_KEYS = {"Rarity","Tier","Quality","Grade","ItemRarity","LootTier","RarityLevel"}
+local RARITY_VALUE_NAMES = {"Rarity","Tier","Quality","Grade","ItemRarity"}
+
+local function DetectRarity(model)
+    -- Build a combined text blob from every readable source
+    local blob = (model.Name .. " "):lower()
+
+    -- 1. BillboardGui / SurfaceGui / ScreenGui text labels inside the model
+    for _, desc in ipairs(model:GetDescendants()) do
+        if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+            blob = blob .. desc.Text:lower() .. " "
+        end
+        -- 2. StringValue / IntValue named like rarity keys
+        if desc:IsA("StringValue") or desc:IsA("IntValue") then
+            for _, key in ipairs(RARITY_VALUE_NAMES) do
+                if desc.Name:lower():find(key:lower()) then
+                    blob = blob .. tostring(desc.Value):lower() .. " "
+                end
+            end
+        end
+    end
+
+    -- 3. Attributes on the model itself
+    for _, key in ipairs(RARITY_ATTR_KEYS) do
+        local v = model:GetAttribute(key)
+        if v then blob = blob .. tostring(v):lower() .. " " end
+    end
+
+    -- 4. Highlight fill/outline colour → map to tier by hue
+    local hl = model:FindFirstChildOfClass("Highlight")
+    if hl then
+        local h, s, v = Color3.toHSV(hl.FillColor)
+        if h > 0.08 and h < 0.16 and s > 0.5 then blob = blob .. " gold "       -- gold/yellow
+        elseif h > 0.70 and h < 0.88 then          blob = blob .. " purple "    -- purple
+        elseif h > 0.55 and h < 0.70 then          blob = blob .. " blue "      -- blue
+        elseif h > 0.25 and h < 0.45 then          blob = blob .. " green "     -- green
+        end
+    end
+
+    -- Match blob against tier table, return highest match
+    local bestTier, bestLabel, bestColor = 0, nil, nil
+    for _, entry in ipairs(RARITY_TIERS) do
+        if blob:find(entry.pattern) and entry.tier > bestTier then
+            bestTier  = entry.tier
+            bestLabel = entry.label
+            bestColor = entry.color
+        end
+    end
+    if bestTier == 0 then return nil end
+    return { tier = bestTier, label = bestLabel, color = bestColor }
+end
+
+-- Crate / container keywords — models matching these get scanned
+local CRATE_KEYWORDS = {
+    "crate","chest","box","container","loot","supply","case","cache",
+    "ammo","medic","drop","spawn","item","pack","bag","stash","locker",
+}
+local function IsCrateLike(model)
+    local n = model.Name:lower()
+    for _, kw in ipairs(CRATE_KEYWORDS) do
+        if n:find(kw) then return true end
+    end
+    -- also scan for BillboardGuis (most extraction games label interactable objects)
+    for _, d in ipairs(model:GetDescendants()) do
+        if d:IsA("BillboardGui") or d:IsA("ProximityPrompt") then return true end
+    end
+    return false
+end
+
+local RarityObjects = {}  -- { model, rarity, position }
+local RARITY_MAX_LABELS = 60
+local RarityLabels = {}
+for i = 1, RARITY_MAX_LABELS do
+    local lbl = NewDrawing("Text")
+    lbl.Size    = 13
+    lbl.Outline = true
+    lbl.Center  = true
+    lbl.Visible = false
+    table.insert(RarityLabels, lbl)
+end
+
+-- Background scanner — runs every 4 seconds
+task.spawn(function()
+    while true do
+        task.wait(4)
+        if not Settings.RarityESP then continue end
+        local found = {}
+        local charModels = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr.Character then charModels[plr.Character] = true end
+        end
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj:IsA("Model") and not charModels[obj] then
+                if IsCrateLike(obj) then
+                    local rar = DetectRarity(obj)
+                    if rar and rar.tier >= Settings.RarityMinTier then
+                        -- find anchor position
+                        local anchor = obj:FindFirstChild("HumanoidRootPart")
+                                    or obj:FindFirstChildOfClass("BasePart")
+                        if anchor then
+                            table.insert(found, {
+                                model    = obj,
+                                rarity   = rar,
+                                position = anchor.Position,
+                                name     = obj.Name,
+                            })
+                        end
+                    end
+                end
+            end
+        end
+        RarityObjects = found
+    end
+end)
+
+-- ============================================================
 -- SET DEFAULT TAB
 -- ============================================================
 do
@@ -2386,6 +2550,36 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
         for _, lbl in ipairs(LootLabels) do lbl.Visible = false end
     end
 
+    -- ── RARITY ESP ────────────────────────────────────────────────
+    if Settings.RarityESP then
+        local ridx = 0
+        local _cam = Camera.CFrame.Position
+        for _, entry in ipairs(RarityObjects) do
+            if entry.model and entry.model.Parent then
+                -- refresh position from model in case it moved
+                local anchor = entry.model:FindFirstChildOfClass("BasePart")
+                local pos = anchor and anchor.Position or entry.position
+                local sp, onSc = Camera:WorldToViewportPoint(pos)
+                local d = (_cam - pos).Magnitude
+                if onSc and d <= Settings.ESP_MaxDistance then
+                    ridx = ridx + 1
+                    if ridx <= RARITY_MAX_LABELS then
+                        local lbl = RarityLabels[ridx]
+                        local dist_str = math.floor(d) .. "m"
+                        lbl.Text     = "◆ [" .. entry.rarity.label .. "]  " .. entry.name .. "  " .. dist_str
+                        lbl.Color    = entry.rarity.color
+                        lbl.Size     = entry.rarity.tier >= 4 and 14 or 12  -- bigger for epic/legendary
+                        lbl.Position = Vector2.new(sp.X, sp.Y)
+                        lbl.Visible  = true
+                    end
+                end
+            end
+        end
+        for i = ridx + 1, RARITY_MAX_LABELS do RarityLabels[i].Visible = false end
+    else
+        for _, lbl in ipairs(RarityLabels) do lbl.Visible = false end
+    end
+
 end)
 
 -- ============================================================
@@ -2658,6 +2852,10 @@ EjectAura = function()
     end)
     pcall(function()
         for _, lbl in ipairs(LootLabels) do lbl:Remove() end
+    end)
+    pcall(function()
+        for _, lbl in ipairs(RarityLabels) do lbl:Remove() end
+        RarityObjects = {}
     end)
     pcall(function()
         for _, entry in pairs(ESPObjects) do
