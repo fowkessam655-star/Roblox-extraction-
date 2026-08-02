@@ -861,18 +861,50 @@ local function ApplySpeed()
     end
 end
 
--- No-clip — zeros CanCollide on every character part every physics step.
--- Stepped fires at physics rate (separate from render), best for collision changes.
+-- No-clip — dual approach:
+--   1. CanCollide = false every Stepped tick (physics pre-step)
+--   2. Move all character parts into a PhysicsService collision group
+--      that doesn't collide with Default or itself, so collision groups
+--      on walls can't override CanCollide.
+local PhysicsService   = game:GetService("PhysicsService")
+local NC_GROUP         = "AuraNoclip"
+local _ncOrigGroups    = {}  -- [part] = original CollisionGroup string
+
+local function _ensureNoclipGroup()
+    pcall(function()
+        PhysicsService:RegisterCollisionGroup(NC_GROUP)
+    end)
+    -- Make AuraNoclip not collide with Default and not with itself
+    pcall(function()
+        PhysicsService:CollisionGroupSetCollidable(NC_GROUP, "Default", false)
+    end)
+    pcall(function()
+        PhysicsService:CollisionGroupSetCollidable(NC_GROUP, NC_GROUP, false)
+    end)
+end
+
 local function ApplyNoClip(enabled)
     if enabled then
-        if noClipConn then return end  -- already running
+        if noClipConn then return end
+        _ensureNoclipGroup()
         noClipConn = RunService.Stepped:Connect(function()
             local char = LocalPlayer.Character
             if not char then return end
             for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
+                if part:IsA("BasePart") then
+                    -- Save original group once
+                    if _ncOrigGroups[part] == nil then
+                        _ncOrigGroups[part] = part.CollisionGroup or "Default"
+                    end
+                    part.CanCollide    = false
+                    pcall(function() part.CollisionGroup = NC_GROUP end)
                 end
+            end
+            -- HumanoidRootPart is the main physics body — make sure it's caught
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root then
+                root.CanCollide = false
+                pcall(function() root.CollisionGroup = NC_GROUP end)
             end
         end)
     else
@@ -880,15 +912,20 @@ local function ApplyNoClip(enabled)
             noClipConn:Disconnect()
             noClipConn = nil
         end
-        -- Restore collision when toggling off
+        -- Restore collision + original collision groups
         local char = LocalPlayer.Character
         if char then
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
                     part.CanCollide = true
+                    local orig = _ncOrigGroups[part]
+                    if orig then
+                        pcall(function() part.CollisionGroup = orig end)
+                    end
                 end
             end
         end
+        _ncOrigGroups = {}
     end
 end
 
