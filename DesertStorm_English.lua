@@ -878,6 +878,7 @@ end
 
 local fullbrightConn = nil
 local speedHackConn  = nil
+local IsSameTeam     = nil  -- forward declaration; defined before render loop
 
 -- Speed hack — set WalkSpeed once per toggle + reapply on respawn.
 -- No per-frame fighting (that causes jitter/rubber-band).
@@ -911,9 +912,7 @@ do
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= LocalPlayer and plr.Character then
                 local model = plr.Character
-                -- skip teammates
-                local plrTeam = plr.Team
-                if LocalPlayer.Team and plrTeam == LocalPlayer.Team then continue end
+                if IsSameTeam and IsSameTeam(model) then continue end
                 local head = model:FindFirstChild("Head")
                 if head then
                     local d = (camPos - head.Position).Magnitude
@@ -2138,33 +2137,59 @@ local EjectAura     = nil  -- forward declaration; defined after all GUI is buil
 -- ── TEAMMATE DETECTION ───────────────────────────────────────
 -- Tries Roblox Teams first, then falls back to common attribute
 -- names used by custom squad/team systems in extraction games.
-local function IsSameTeam(model)
+IsSameTeam = function(model)
     local plr = Players:GetPlayerFromCharacter(model)
     if not plr or plr == LocalPlayer then return false end
 
-    -- 1. Roblox built-in Team service
-    if LocalPlayer.Team ~= nil then
-        return plr.Team == LocalPlayer.Team
-    end
-
-    -- 2. Attribute-based squad (common in custom extraction games)
-    local ATTR_KEYS = {"Team", "Squad", "Group", "Party", "Alliance", "Side", "Faction"}
     local myChar = LocalPlayer.Character
-    for _, key in ipairs(ATTR_KEYS) do
-        local myVal   = myChar   and myChar:GetAttribute(key)
-        local theirVal= model:GetAttribute(key)
-        if myVal ~= nil and myVal == theirVal then return true end
-        -- Also check on the Player object itself
-        local myPlrVal   = LocalPlayer:GetAttribute(key)
-        local theirPlrVal= plr:GetAttribute(key)
-        if myPlrVal ~= nil and myPlrVal == theirPlrVal then return true end
+
+    -- 1. Roblox built-in Team service (non-nil AND not neutral/lobby)
+    if LocalPlayer.Team ~= nil and plr.Team ~= nil then
+        -- make sure we're not both just on the default "Neutral" catch-all
+        -- by also verifying the team has a non-generic name
+        local tname = tostring(LocalPlayer.Team.Name):lower()
+        if tname ~= "neutral" and tname ~= "players" and tname ~= "all" then
+            return plr.Team == LocalPlayer.Team
+        end
     end
 
-    -- 3. IntValue/StringValue named "Team"/"Squad" inside character
-    for _, key in ipairs({"Team", "Squad", "Group", "Party"}) do
-        local myVal    = myChar and myChar:FindFirstChild(key)
-        local theirVal = model:FindFirstChild(key)
-        if myVal and theirVal and myVal.Value == theirVal.Value then return true end
+    -- 2. TeamColor — extraction games often stamp squadmates with matching TeamColor
+    --    Skip BrickColor.White/Gray which are generic defaults
+    local myTC = LocalPlayer.TeamColor
+    if myTC ~= BrickColor.new("White") and myTC ~= BrickColor.new("Medium stone grey")
+       and myTC ~= BrickColor.new("Black") then
+        if plr.TeamColor == myTC then return true end
+    end
+
+    -- 3. Attribute-based squad (broad set of names)
+    local ATTR_KEYS = {
+        "Team","Squad","SquadId","SquadID","Group","GroupId","GroupID",
+        "Party","PartyId","Alliance","Side","Faction","TeamId","TeamID",
+        "SideId","GuildId","RoomId","SessionId","LobbyId",
+    }
+    for _, key in ipairs(ATTR_KEYS) do
+        local myVal    = myChar and myChar:GetAttribute(key)
+        local theirVal = model:GetAttribute(key)
+        if myVal ~= nil and theirVal ~= nil and myVal == theirVal then return true end
+
+        local myPlrVal    = LocalPlayer:GetAttribute(key)
+        local theirPlrVal = plr:GetAttribute(key)
+        if myPlrVal ~= nil and theirPlrVal ~= nil and myPlrVal == theirPlrVal then return true end
+    end
+
+    -- 4. IntValue/StringValue children named like squad keys
+    for _, key in ipairs({"Team","Squad","SquadId","Group","Party","TeamId","SideId"}) do
+        local myObj    = myChar and myChar:FindFirstChild(key)
+        local theirObj = model:FindFirstChild(key)
+        if myObj and theirObj and myObj.Value ~= nil and myObj.Value == theirObj.Value then
+            return true
+        end
+        -- also check on Player instance
+        local myPlrObj    = LocalPlayer:FindFirstChild(key)
+        local theirPlrObj = plr:FindFirstChild(key)
+        if myPlrObj and theirPlrObj and myPlrObj.Value ~= nil and myPlrObj.Value == theirPlrObj.Value then
+            return true
+        end
     end
 
     return false
