@@ -62,6 +62,7 @@ local Settings = {
     NoSway          = false,
     SpeedHack       = false,
     SpeedValue      = 32,
+    NoClip          = false,
     MagicBullet     = false,
     -- esp
     ESP_Enabled     = false,
@@ -847,6 +848,7 @@ end
 
 local fullbrightConn = nil
 local speedHackConn  = nil
+local noClipConn     = nil
 
 -- Speed hack — set WalkSpeed once per toggle + reapply on respawn.
 -- No per-frame fighting (that causes jitter/rubber-band).
@@ -859,9 +861,45 @@ local function ApplySpeed()
     end
 end
 
+-- No-clip — zeros CanCollide on every character part every physics step.
+-- Stepped fires at physics rate (separate from render), best for collision changes.
+local function ApplyNoClip(enabled)
+    if enabled then
+        if noClipConn then return end  -- already running
+        noClipConn = RunService.Stepped:Connect(function()
+            local char = LocalPlayer.Character
+            if not char then return end
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
+            end
+        end)
+    else
+        if noClipConn then
+            noClipConn:Disconnect()
+            noClipConn = nil
+        end
+        -- Restore collision when toggling off
+        local char = LocalPlayer.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = true
+                end
+            end
+        end
+    end
+end
+
 LocalPlayer.CharacterAdded:Connect(function(char)
     if Settings.SpeedHack then
         char:WaitForChild("Humanoid", 5).WalkSpeed = Settings.SpeedValue
+    end
+    -- Reapply noclip on respawn — collision resets when character spawns fresh
+    if Settings.NoClip then
+        task.wait(0.1)
+        ApplyNoClip(true)
     end
 end)
 
@@ -1025,13 +1063,14 @@ end)
 -- ── MOVEMENT ─────────────────────────────────────────────────
 local movementSection = CreateSection(SettingsTab, "Movement")
 local speedInfo = Instance.new("TextLabel", movementSection)
-speedInfo.Size               = UDim2.new(1, -12, 0, 18)
+speedInfo.Size               = UDim2.new(1, -12, 0, 30)
 speedInfo.BackgroundTransparency = 1
 speedInfo.TextColor3         = Colors.Gray1
 speedInfo.Font               = Enum.Font.Gotham
 speedInfo.TextSize           = 11
 speedInfo.TextXAlignment     = Enum.TextXAlignment.Left
-speedInfo.Text               = "Keybind: [H]"
+speedInfo.TextWrapped        = true
+speedInfo.Text               = "Speed: [H]  ·  No Clip: [N]"
 CreateToggle(movementSection, "Speed Hack", Settings.SpeedHack, function(v)
     Settings.SpeedHack = v
     ApplySpeed()
@@ -1039,6 +1078,10 @@ end)
 CreateSlider(movementSection, "Speed", 16, 100, Settings.SpeedValue, function(v)
     Settings.SpeedValue = v
     if Settings.SpeedHack then ApplySpeed() end
+end)
+CreateToggle(movementSection, "No Clip", Settings.NoClip, function(v)
+    Settings.NoClip = v
+    ApplyNoClip(v)
 end)
 
 -- ── COMBAT ────────────────────────────────────────────────────
@@ -1244,7 +1287,7 @@ local CFG_KEYS = {
     "ESP_MaxDistance","HealthBar","Tracer","WeaponLabel",
     "Loot_Enabled","Best_Loot_Only","Radar_Enabled",
     "Crosshair_Enabled","Crosshair_Style",
-    "SpeedHack","SpeedValue","MagicBullet",
+    "SpeedHack","SpeedValue","NoClip","MagicBullet",
 }
 
 local function CfgSave(name)
@@ -2570,6 +2613,11 @@ UserInput.InputBegan:Connect(function(input, _gameProcessed)
         Settings.SpeedHack = not Settings.SpeedHack
         ApplySpeed()
     end
+    -- No clip toggle [N]
+    if input.KeyCode == Enum.KeyCode.N then
+        Settings.NoClip = not Settings.NoClip
+        ApplyNoClip(Settings.NoClip)
+    end
 end)
 
 -- ============================================================
@@ -2604,6 +2652,20 @@ EjectAura = function()
         speedHackConn:Disconnect()
         speedHackConn = nil
     end
+
+    -- Kill noclip + restore collision
+    if noClipConn then
+        noClipConn:Disconnect()
+        noClipConn = nil
+    end
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = true end
+            end
+        end
+    end)
 
     -- Restore mouse + lighting
     pcall(function() UserInput.MouseBehavior = Enum.MouseBehavior.LockCenter end)
