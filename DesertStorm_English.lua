@@ -2661,7 +2661,20 @@ RunService:BindToRenderStep("AuraCameraStep", Enum.RenderPriority.Camera.Value +
             -- Hard rotation lock — position stays game-managed (follows character),
             -- we only replace the look direction. Mouse input was already written
             -- by the game camera at priority 200; we stomp it here at 201.
-            Camera.CFrame = CFrame.lookAt(camPos, CurrentTarget.Position)
+            --
+            -- Aim correction: Part.Position is the geometric center, but in R15
+            -- the Head part's center sits higher than the face hitbox.
+            -- We shift down by a fraction of the part's Y size so the aim
+            -- lands on the face rather than above the head.
+            local aimPos = CurrentTarget.Position
+            local partName = CurrentTarget.Name
+            if partName == "Head" then
+                -- Head: aim at lower-center (face/chin area) instead of part center
+                aimPos = aimPos - Vector3.new(0, CurrentTarget.Size.Y * 0.25, 0)
+            elseif partName == "UpperTorso" then
+                aimPos = aimPos - Vector3.new(0, CurrentTarget.Size.Y * 0.1, 0)
+            end
+            Camera.CFrame = CFrame.lookAt(camPos, aimPos)
             nrPitch = nil  -- don't let no-recoil fight the lock
             return
         end
