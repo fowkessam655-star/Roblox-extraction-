@@ -62,8 +62,10 @@ local Settings = {
     NoSway          = false,
     SpeedHack       = false,
     SpeedValue      = 32,
-    NoClip          = false,
     MagicBullet     = false,
+    SilentAim       = false,
+    AntiAFK         = false,
+    FOVValue        = 70,
     -- esp
     ESP_Enabled     = false,
     NPC_Enabled     = false,
@@ -848,7 +850,6 @@ end
 
 local fullbrightConn = nil
 local speedHackConn  = nil
-local noClipConn     = nil
 
 -- Speed hack — set WalkSpeed once per toggle + reapply on respawn.
 -- No per-frame fighting (that causes jitter/rubber-band).
@@ -861,117 +862,31 @@ local function ApplySpeed()
     end
 end
 
--- No-clip — PlatformStand + CFrame approach (most aggressive):
---   PlatformStand disables the Humanoid character controller entirely,
---   handing physics fully to us. We then CFrame the root every frame
---   and zero velocity so the engine can't fight back.
---   SPACE = fly up, LCTRL = fly down.
-local NC_SPEED = 28
-
-local function ApplyNoClip(enabled)
-    if enabled then
-        if noClipConn then return end
-
-        local char = LocalPlayer.Character
-        local hum  = char and char:FindFirstChildOfClass("Humanoid")
-
-        -- PlatformStand kills the character controller dead
-        if hum then
-            pcall(function() hum.PlatformStand = true end)
-        end
-
-        noClipConn = RunService.Heartbeat:Connect(function(dt)
-            local c    = LocalPlayer.Character
-            local root = c and c:FindFirstChild("HumanoidRootPart")
-            local h    = c and c:FindFirstChildOfClass("Humanoid")
-            if not root or not h then return end
-
-            -- Keep PlatformStand enforced every frame
-            pcall(function() h.PlatformStand = true end)
-
-            -- CanCollide = false on everything
-            for _, part in ipairs(c:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    part.CanCollide = false
-                end
-            end
-
-            -- Read WASD + camera direction
-            local cam   = workspace.CurrentCamera
-            local look  = cam.CFrame.LookVector
-            local right = cam.CFrame.RightVector
-            local fwd   = Vector3.new(look.X,  0, look.Z)
-            local rgt   = Vector3.new(right.X, 0, right.Z)
-            if fwd.Magnitude  > 0 then fwd = fwd:Unit()   end
-            if rgt.Magnitude  > 0 then rgt = rgt:Unit()   end
-
-            local move = Vector3.new()
-            if UserInput:IsKeyDown(Enum.KeyCode.W) then move += fwd  end
-            if UserInput:IsKeyDown(Enum.KeyCode.S) then move -= fwd  end
-            if UserInput:IsKeyDown(Enum.KeyCode.A) then move -= rgt  end
-            if UserInput:IsKeyDown(Enum.KeyCode.D) then move += rgt  end
-            if UserInput:IsKeyDown(Enum.KeyCode.Space)       then move += Vector3.new(0,1,0) end
-            if UserInput:IsKeyDown(Enum.KeyCode.LeftControl) then move -= Vector3.new(0,1,0) end
-
-            if move.Magnitude > 0 then
-                root.CFrame = root.CFrame + move.Unit * NC_SPEED * dt
-            end
-
-            -- Zero velocity so physics can't push us back out
-            pcall(function() root.AssemblyLinearVelocity  = Vector3.new() end)
-            pcall(function() root.AssemblyAngularVelocity = Vector3.new() end)
-        end)
-    else
-        if noClipConn then
-            noClipConn:Disconnect()
-            noClipConn = nil
-        end
-        local char = LocalPlayer.Character
-        if char then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                pcall(function() hum.PlatformStand = false end)
-            end
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    part.CanCollide = true
-                end
-            end
-        end
-    end
-end
-
 LocalPlayer.CharacterAdded:Connect(function(char)
     if Settings.SpeedHack then
         char:WaitForChild("Humanoid", 5).WalkSpeed = Settings.SpeedValue
     end
-    -- Reapply noclip on respawn — collision resets when character spawns fresh
-    if Settings.NoClip then
-        task.wait(0.1)
-        ApplyNoClip(true)
-    end
 end)
 
 -- ── MAGIC BULLET ─────────────────────────────────────────────
--- Hooks RemoteEvent:FireServer so when the weapon sends a shot to the server,
--- any Vector3 / CFrame / Instance argument that looks like a hit position
--- gets replaced with the current target's head position.
--- Requires hookfunction (available in most executors: Synapse, Fluxus, etc.)
+-- Uses __namecall metatable hook — works on every executor, no hookfunction needed.
+-- Intercepts RemoteEvent:FireServer and RemoteFunction:InvokeServer at the engine
+-- level. When the local player has a tool equipped and fires any remote, any
+-- Vector3/CFrame argument is replaced with the nearest enemy head position.
 do
-    local mbHookActive = false
-    local _origFireServer
-
     local function GetMBTarget()
-        -- Use aimbot CurrentTarget if available, else find nearest head
         if CurrentTarget and CurrentTarget.Parent then
             return CurrentTarget.Position
         end
-        -- Fallback: nearest visible player head
         local camPos = Camera.CFrame.Position
         local best, bestDist = nil, math.huge
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= LocalPlayer and plr.Character then
-                local head = plr.Character:FindFirstChild("Head")
+                local model = plr.Character
+                -- skip teammates
+                local plrTeam = plr.Team
+                if LocalPlayer.Team and plrTeam == LocalPlayer.Team then continue end
+                local head = model:FindFirstChild("Head")
                 if head then
                     local d = (camPos - head.Position).Magnitude
                     if d < bestDist then
@@ -985,71 +900,64 @@ do
     end
 
     local function PatchArgs(args, targetPos)
-        local patched = table.pack(table.unpack(args))
-        for i = 1, patched.n do
-            local v = patched[i]
-            if typeof(v) == "Vector3" then
-                -- Replace any Vector3 that looks like a world position (not a direction)
-                if v.Magnitude > 1 then
-                    patched[i] = targetPos
-                end
+        local out = table.pack(table.unpack(args, 1, args.n))
+        for i = 1, out.n do
+            local v = out[i]
+            if typeof(v) == "Vector3" and v.Magnitude > 1 then
+                out[i] = targetPos
             elseif typeof(v) == "CFrame" then
-                patched[i] = CFrame.new(targetPos)
-            elseif typeof(v) == "Instance" and v:IsA("BasePart") then
-                -- Some games pass the hit part — don't replace Instance args
+                out[i] = CFrame.new(targetPos)
             end
         end
-        return patched
+        return out
     end
 
-    local function EnableMagicBullet()
-        if mbHookActive then return end
-        if not hookfunction then return end  -- executor doesn't support hooking
-        _origFireServer = hookfunction(RemoteEvent.FireServer, function(self, ...)
-            if not Settings.MagicBullet then
-                return _origFireServer(self, ...)
+    -- __namecall hook — fires for every :Method() call on any Instance
+    pcall(function()
+        local mt  = getrawmetatable(game)
+        local old = mt.__namecall
+        setreadonly(mt, false)
+        mt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            if Settings.MagicBullet
+            and (method == "FireServer" or method == "InvokeServer")
+            and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
+                local char = LocalPlayer.Character
+                local tool = char and char:FindFirstChildOfClass("Tool")
+                if tool then
+                    local targetPos = GetMBTarget()
+                    if targetPos then
+                        local args = table.pack(...)
+                        local patched = PatchArgs(args, targetPos)
+                        return old(self, table.unpack(patched, 1, patched.n))
+                    end
+                end
             end
-            -- Only intercept remotes fired while the local player has a gun
-            local char = LocalPlayer.Character
-            local tool = char and char:FindFirstChildOfClass("Tool")
-            if not tool then
-                return _origFireServer(self, ...)
-            end
-            local targetPos = GetMBTarget()
-            if not targetPos then
-                return _origFireServer(self, ...)
-            end
-            local args = table.pack(...)
-            local patched = PatchArgs(args, targetPos)
-            return _origFireServer(self, table.unpack(patched, 1, patched.n))
+            return old(self, ...)
         end)
-        mbHookActive = true
-    end
-
-    -- Also hook RemoteFunction:InvokeServer for games that use RF for damage
-    local _origInvokeServer
-    local function EnableMagicBulletRF()
-        if not hookfunction then return end
-        if _origInvokeServer then return end
-        _origInvokeServer = hookfunction(RemoteFunction.InvokeServer, function(self, ...)
-            if not Settings.MagicBullet then
-                return _origInvokeServer(self, ...)
-            end
-            local char = LocalPlayer.Character
-            local tool = char and char:FindFirstChildOfClass("Tool")
-            if not tool then return _origInvokeServer(self, ...) end
-            local targetPos = GetMBTarget()
-            if not targetPos then return _origInvokeServer(self, ...) end
-            local args    = table.pack(...)
-            local patched = PatchArgs(args, targetPos)
-            return _origInvokeServer(self, table.unpack(patched, 1, patched.n))
-        end)
-    end
-
-    -- Attempt to enable — will silently no-op if hookfunction is unavailable
-    pcall(EnableMagicBullet)
-    pcall(EnableMagicBulletRF)
+        setreadonly(mt, true)
+    end)
 end
+
+-- ── ANTI-AFK ─────────────────────────────────────────────────
+task.spawn(function()
+    while true do
+        task.wait(55)  -- fires just under the typical 60s AFK threshold
+        if Settings.AntiAFK then
+            local char = LocalPlayer.Character
+            local hum  = char and char:FindFirstChildOfClass("Humanoid")
+            -- fire a fake jump so the server sees activity
+            if hum then pcall(function() hum.Jump = true end) end
+            -- VirtualInputManager fallback
+            pcall(function()
+                local vim = game:GetService("VirtualInputManager")
+                vim:SendKeyEvent(true,  "Space", false, game)
+                task.wait(0.08)
+                vim:SendKeyEvent(false, "Space", false, game)
+            end)
+        end
+    end
+end)
 
 local function SetFullbright(enabled)
     if enabled then
@@ -1119,7 +1027,7 @@ speedInfo.Font               = Enum.Font.Gotham
 speedInfo.TextSize           = 11
 speedInfo.TextXAlignment     = Enum.TextXAlignment.Left
 speedInfo.TextWrapped        = true
-speedInfo.Text               = "Speed: [H]  ·  No Clip: [N]"
+speedInfo.Text               = "Speed Hack: [H]"
 CreateToggle(movementSection, "Speed Hack", Settings.SpeedHack, function(v)
     Settings.SpeedHack = v
     ApplySpeed()
@@ -1128,9 +1036,15 @@ CreateSlider(movementSection, "Speed", 16, 100, Settings.SpeedValue, function(v)
     Settings.SpeedValue = v
     if Settings.SpeedHack then ApplySpeed() end
 end)
-CreateToggle(movementSection, "No Clip", Settings.NoClip, function(v)
-    Settings.NoClip = v
-    ApplyNoClip(v)
+
+-- ── VISUALS / MISC ────────────────────────────────────────────
+local miscSection = CreateSection(SettingsTab, "Misc")
+CreateToggle(miscSection, "Anti-AFK", Settings.AntiAFK, function(v)
+    Settings.AntiAFK = v
+end)
+CreateSlider(miscSection, "Field of View", 40, 120, Settings.FOVValue, function(v)
+    Settings.FOVValue = v
+    workspace.CurrentCamera.FieldOfView = v
 end)
 
 -- ── COMBAT ────────────────────────────────────────────────────
@@ -1143,9 +1057,12 @@ mbInfo.Font               = Enum.Font.Gotham
 mbInfo.TextSize           = 11
 mbInfo.TextXAlignment     = Enum.TextXAlignment.Left
 mbInfo.TextWrapped        = true
-mbInfo.Text               = "Magic Bullet: redirects shots to target head."
+mbInfo.Text               = "Magic Bullet: redirects shots to target head.\nSilent Aim: locks without holding aim key."
 CreateToggle(combatSection, "Magic Bullet", Settings.MagicBullet, function(v)
     Settings.MagicBullet = v
+end)
+CreateToggle(combatSection, "Silent Aim", Settings.SilentAim, function(v)
+    Settings.SilentAim = v
 end)
 
 -- ── FORCE EXTRACT ────────────────────────────────────────────
@@ -1336,7 +1253,7 @@ local CFG_KEYS = {
     "ESP_MaxDistance","HealthBar","Tracer","WeaponLabel",
     "Loot_Enabled","Best_Loot_Only","Radar_Enabled",
     "Crosshair_Enabled","Crosshair_Style",
-    "SpeedHack","SpeedValue","NoClip","MagicBullet",
+    "SpeedHack","SpeedValue","MagicBullet","SilentAim","AntiAFK","FOVValue",
 }
 
 local function CfgSave(name)
@@ -2167,20 +2084,38 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
         local shouldShow = (target.IsNPC and Settings.NPC_Enabled)
                         or (not target.IsNPC and Settings.ESP_Enabled)
 
-        -- Cache humanoid/root lookups per entry
-        if not entry._hum  then entry._hum  = model:FindFirstChildOfClass("Humanoid") end
-        if not entry._root then entry._root = model:FindFirstChild("HumanoidRootPart") end
-        if not entry._head then entry._head = model:FindFirstChild("Head") end
+        -- Refresh cached refs every 30 frames (respawn / tool changes)
+        if not entry._hum  or _frame % 30 == 0 then entry._hum  = model:FindFirstChildOfClass("Humanoid") end
+        if not entry._root or _frame % 30 == 0 then entry._root = model:FindFirstChild("HumanoidRootPart") end
+        if not entry._head or _frame % 30 == 0 then entry._head = model:FindFirstChild("Head") end
         local hum  = entry._hum
         local root = entry._root
         local head = entry._head
 
         if shouldShow and hum and hum.Health > 0 and root then
-            local rootPos          = root.Position
-            local screenPos, onScreen = Camera:WorldToViewportPoint(rootPos)
-            local dist             = (camPos - rootPos).Magnitude
+            local rootPos = root.Position
+            local dist    = (camPos - rootPos).Magnitude
 
-            -- Color: throttled raycast
+            -- Check if ANY body part is on screen (not just root)
+            -- This fixes players being hidden when only partially in view.
+            local CHECK_PARTS = {"Head","UpperTorso","Torso","HumanoidRootPart","LeftUpperArm","RightUpperArm"}
+            local anyOnScreen = false
+            local screenPos   = Vector3.new()
+            for _, pname in ipairs(CHECK_PARTS) do
+                local p = model:FindFirstChild(pname)
+                if p then
+                    local sp, vis = Camera:WorldToViewportPoint(p.Position)
+                    if vis then
+                        anyOnScreen = true
+                        -- Use the root screen position for box anchor if root is on screen
+                        if pname == "HumanoidRootPart" then screenPos = sp end
+                        if screenPos == Vector3.new() then screenPos = sp end
+                    end
+                end
+            end
+
+            -- Color: enemies always red, teammates green.
+            -- If any body part is visible → bright red, else dimmer red.
             local color
             if target.IsNPC then
                 color = Colors.Orange
@@ -2191,30 +2126,33 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
                     color = Color3.fromRGB(0, 220, 80)
                     _raycastCache[model] = color
                 elseif doRaycast or not _raycastCache[model] then
-                    local aimPart = model:FindFirstChild(Settings.Aim_Part) or head or root
-                    local canShoot = false
-                    if aimPart then
-                        local params = RaycastParams.new()
-                        params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
-                        params.FilterType  = Enum.RaycastFilterType.Exclude
-                        params.IgnoreWater = true
-                        local ray = workspace:Raycast(
-                            camPos,
-                            aimPart.Position - camPos,
-                            params
-                        )
-                        canShoot = not ray or ray.Instance:IsDescendantOf(model)
+                    -- Check if ANY part is visible (not blocked by geometry)
+                    local rcParams = RaycastParams.new()
+                    rcParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+                    rcParams.FilterType  = Enum.RaycastFilterType.Exclude
+                    rcParams.IgnoreWater = true
+                    local anyVisible = false
+                    for _, pname in ipairs(CHECK_PARTS) do
+                        local p = model:FindFirstChild(pname)
+                        if p then
+                            local ray = workspace:Raycast(camPos, p.Position - camPos, rcParams)
+                            if not ray or ray.Instance:IsDescendantOf(model) then
+                                anyVisible = true
+                                break
+                            end
+                        end
                     end
-                    color = canShoot
+                    -- Visible = bright red, occluded = dimmer orange-red
+                    color = anyVisible
                         and Color3.fromRGB(255, 50,  50)
-                        or  Color3.fromRGB(255, 200, 0)
+                        or  Color3.fromRGB(200, 80,  40)
                     _raycastCache[model] = color
                 else
                     color = _raycastCache[model]
                 end
             end
 
-            if dist <= Settings.ESP_MaxDistance and onScreen then
+            if dist <= Settings.ESP_MaxDistance and anyOnScreen then
                 entry.Box.Color              = color
                 entry.Text.Color             = color
                 entry.Highlight.FillColor    = color
@@ -2223,7 +2161,7 @@ MainRenderConn = RunService.RenderStepped:Connect(function()
 
                 local boxHeight  = 0
                 local boxTopY    = screenPos.Y
-                local rootScreen = screenPos  -- already have it from WorldToViewportPoint above
+                local rootScreen = screenPos
 
                 if Settings.ESP_Type == "Full" then
                     entry.Box.Visible       = false
@@ -2465,7 +2403,7 @@ RunService:BindToRenderStep("AuraCameraStep", Enum.RenderPriority.Camera.Value +
     local screenCenter= Vector2.new(vpX / 2, vpY / 2)
 
     -- ── AIMBOT ───────────────────────────────────────────────────
-    local aimActive = IsAimKeyDown()
+    local aimActive = IsAimKeyDown() or Settings.SilentAim
     if Settings.Aimbot_Enabled and aimActive and not ScreenGui.Enabled then
 
         -- Drop target if it died, went off screen, or left the world
@@ -2662,11 +2600,6 @@ UserInput.InputBegan:Connect(function(input, _gameProcessed)
         Settings.SpeedHack = not Settings.SpeedHack
         ApplySpeed()
     end
-    -- No clip toggle [N]
-    if input.KeyCode == Enum.KeyCode.N then
-        Settings.NoClip = not Settings.NoClip
-        ApplyNoClip(Settings.NoClip)
-    end
 end)
 
 -- ============================================================
@@ -2701,20 +2634,6 @@ EjectAura = function()
         speedHackConn:Disconnect()
         speedHackConn = nil
     end
-
-    -- Kill noclip + restore collision
-    if noClipConn then
-        noClipConn:Disconnect()
-        noClipConn = nil
-    end
-    pcall(function()
-        local char = LocalPlayer.Character
-        if char then
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = true end
-            end
-        end
-    end)
 
     -- Restore mouse + lighting
     pcall(function() UserInput.MouseBehavior = Enum.MouseBehavior.LockCenter end)
