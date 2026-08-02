@@ -861,67 +861,63 @@ local function ApplySpeed()
     end
 end
 
--- No-clip — ghost movement approach:
---   Bypasses physics entirely by directly writing HumanoidRootPart.CFrame
---   every Heartbeat based on WASD + camera direction.
---   CanCollide = false is still set each Stepped tick as a backup,
---   but the CFrame write is what actually moves through walls.
---   SPACE = fly up, LCTRL = fly down. Normal speed while active.
-local NC_SPEED = 28  -- stud/s while noclipping
+-- No-clip — PlatformStand + CFrame approach (most aggressive):
+--   PlatformStand disables the Humanoid character controller entirely,
+--   handing physics fully to us. We then CFrame the root every frame
+--   and zero velocity so the engine can't fight back.
+--   SPACE = fly up, LCTRL = fly down.
+local NC_SPEED = 28
 
 local function ApplyNoClip(enabled)
     if enabled then
         if noClipConn then return end
 
-        -- Kill gravity + physics fighting us
-        local function freezeParts(char)
-            if not char then return end
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    part.CanCollide = false
-                    pcall(function() part.AssemblyLinearVelocity  = Vector3.new() end)
-                    pcall(function() part.AssemblyAngularVelocity = Vector3.new() end)
-                end
-            end
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+
+        -- PlatformStand kills the character controller dead
+        if hum then
+            pcall(function() hum.PlatformStand = true end)
         end
 
         noClipConn = RunService.Heartbeat:Connect(function(dt)
-            local char = LocalPlayer.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            local hum  = char and char:FindFirstChildOfClass("Humanoid")
-            if not root or not hum then return end
+            local c    = LocalPlayer.Character
+            local root = c and c:FindFirstChild("HumanoidRootPart")
+            local h    = c and c:FindFirstChildOfClass("Humanoid")
+            if not root or not h then return end
 
-            -- Zero out collision every frame
-            freezeParts(char)
+            -- Keep PlatformStand enforced every frame
+            pcall(function() h.PlatformStand = true end)
 
-            -- Suppress humanoid gravity / falling state
-            pcall(function()
-                hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-                hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,     false)
-                hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp,   false)
-            end)
+            -- CanCollide = false on everything
+            for _, part in ipairs(c:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
 
-            -- Read movement input
+            -- Read WASD + camera direction
             local cam   = workspace.CurrentCamera
-            local fwd   = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
-            local right = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
-            if fwd.Magnitude  > 0 then fwd   = fwd:Unit()   end
-            if right.Magnitude > 0 then right = right:Unit() end
+            local look  = cam.CFrame.LookVector
+            local right = cam.CFrame.RightVector
+            local fwd   = Vector3.new(look.X,  0, look.Z)
+            local rgt   = Vector3.new(right.X, 0, right.Z)
+            if fwd.Magnitude  > 0 then fwd = fwd:Unit()   end
+            if rgt.Magnitude  > 0 then rgt = rgt:Unit()   end
 
             local move = Vector3.new()
-            if UserInput:IsKeyDown(Enum.KeyCode.W) then move = move + fwd   end
-            if UserInput:IsKeyDown(Enum.KeyCode.S) then move = move - fwd   end
-            if UserInput:IsKeyDown(Enum.KeyCode.A) then move = move - right  end
-            if UserInput:IsKeyDown(Enum.KeyCode.D) then move = move + right  end
-            if UserInput:IsKeyDown(Enum.KeyCode.Space)       then move = move + Vector3.new(0, 1, 0) end
-            if UserInput:IsKeyDown(Enum.KeyCode.LeftControl) then move = move - Vector3.new(0, 1, 0) end
+            if UserInput:IsKeyDown(Enum.KeyCode.W) then move += fwd  end
+            if UserInput:IsKeyDown(Enum.KeyCode.S) then move -= fwd  end
+            if UserInput:IsKeyDown(Enum.KeyCode.A) then move -= rgt  end
+            if UserInput:IsKeyDown(Enum.KeyCode.D) then move += rgt  end
+            if UserInput:IsKeyDown(Enum.KeyCode.Space)       then move += Vector3.new(0,1,0) end
+            if UserInput:IsKeyDown(Enum.KeyCode.LeftControl) then move -= Vector3.new(0,1,0) end
 
             if move.Magnitude > 0 then
-                -- Direct CFrame write — physics engine can't block this
                 root.CFrame = root.CFrame + move.Unit * NC_SPEED * dt
             end
 
-            -- Kill all velocity so physics doesn't drift us back
+            -- Zero velocity so physics can't push us back out
             pcall(function() root.AssemblyLinearVelocity  = Vector3.new() end)
             pcall(function() root.AssemblyAngularVelocity = Vector3.new() end)
         end)
@@ -930,16 +926,11 @@ local function ApplyNoClip(enabled)
             noClipConn:Disconnect()
             noClipConn = nil
         end
-        -- Restore collision and humanoid states
         local char = LocalPlayer.Character
         if char then
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum then
-                pcall(function()
-                    hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
-                    hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,     true)
-                    hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp,   true)
-                end)
+                pcall(function() hum.PlatformStand = false end)
             end
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
