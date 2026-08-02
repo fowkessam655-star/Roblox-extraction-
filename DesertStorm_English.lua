@@ -802,30 +802,14 @@ CreateToggle(overlaysSection, "Best Loot Only",Settings.Best_Loot_Only, function
 CreateToggle(overlaysSection, "Radar",         Settings.Radar_Enabled,  function(v) Settings.Radar_Enabled = v end)
 CreateToggle(overlaysSection, "Rarity ESP",   Settings.RarityESP,      function(v) Settings.RarityESP     = v end)
 
--- Min Tier picker: Common=1 Uncommon=2 Rare=3 Epic=4 Legendary=5
-do
-    local tierNames = {"Common","Uncommon","Rare","Epic","Legendary"}
-    local tierLabel = CreateLabel and CreateLabel(overlaysSection,
-        "Min Tier: " .. (tierNames[Settings.RarityMinTier] or "Uncommon"))
-    local tierOptions = {}
-    for i, name in ipairs(tierNames) do
-        table.insert(tierOptions, {Name = name, Tier = i})
-    end
-    if CreateDropdown then
-        CreateDropdown(overlaysSection, "Min Rarity Tier", tierNames, tierNames[Settings.RarityMinTier],
-            function(v)
-                for i, name in ipairs(tierNames) do
-                    if name == v then Settings.RarityMinTier = i; break end
-                end
-                if tierLabel then tierLabel.Text = "Min Tier: " .. v end
-            end)
-    elseif CreateSlider then
-        CreateSlider(overlaysSection, "Min Rarity Tier (1-5)", 1, 5, Settings.RarityMinTier, function(v)
-            Settings.RarityMinTier = math.floor(v)
-            if tierLabel then tierLabel.Text = "Min Tier: " .. (tierNames[math.floor(v)] or "?") end
-        end)
-    end
-end
+-- Min Tier: 1=Common 2=Uncommon 3=Rare 4=Epic 5=Legendary
+CreateDropdown(overlaysSection, "Min Rarity Tier",
+    {"Common","Uncommon","Rare","Epic","Legendary"},
+    Settings.RarityMinTier,
+    function(v)
+        local map = {Common=1,Uncommon=2,Rare=3,Epic=4,Legendary=5}
+        Settings.RarityMinTier = map[v] or Settings.RarityMinTier
+    end)
 
 -- Section: "Crosshair"
 local crosshairSection = CreateSection(VisualsTab, "Crosshair")
