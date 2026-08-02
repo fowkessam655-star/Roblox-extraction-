@@ -861,71 +861,92 @@ local function ApplySpeed()
     end
 end
 
--- No-clip — dual approach:
---   1. CanCollide = false every Stepped tick (physics pre-step)
---   2. Move all character parts into a PhysicsService collision group
---      that doesn't collide with Default or itself, so collision groups
---      on walls can't override CanCollide.
-local PhysicsService   = game:GetService("PhysicsService")
-local NC_GROUP         = "AuraNoclip"
-local _ncOrigGroups    = {}  -- [part] = original CollisionGroup string
-
-local function _ensureNoclipGroup()
-    pcall(function()
-        PhysicsService:RegisterCollisionGroup(NC_GROUP)
-    end)
-    -- Make AuraNoclip not collide with Default and not with itself
-    pcall(function()
-        PhysicsService:CollisionGroupSetCollidable(NC_GROUP, "Default", false)
-    end)
-    pcall(function()
-        PhysicsService:CollisionGroupSetCollidable(NC_GROUP, NC_GROUP, false)
-    end)
-end
+-- No-clip — ghost movement approach:
+--   Bypasses physics entirely by directly writing HumanoidRootPart.CFrame
+--   every Heartbeat based on WASD + camera direction.
+--   CanCollide = false is still set each Stepped tick as a backup,
+--   but the CFrame write is what actually moves through walls.
+--   SPACE = fly up, LCTRL = fly down. Normal speed while active.
+local NC_SPEED = 28  -- stud/s while noclipping
 
 local function ApplyNoClip(enabled)
     if enabled then
         if noClipConn then return end
-        _ensureNoclipGroup()
-        noClipConn = RunService.Stepped:Connect(function()
-            local char = LocalPlayer.Character
+
+        -- Kill gravity + physics fighting us
+        local function freezeParts(char)
             if not char then return end
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
-                    -- Save original group once
-                    if _ncOrigGroups[part] == nil then
-                        _ncOrigGroups[part] = part.CollisionGroup or "Default"
-                    end
-                    part.CanCollide    = false
-                    pcall(function() part.CollisionGroup = NC_GROUP end)
+                    part.CanCollide = false
+                    pcall(function() part.AssemblyLinearVelocity  = Vector3.new() end)
+                    pcall(function() part.AssemblyAngularVelocity = Vector3.new() end)
                 end
             end
-            -- HumanoidRootPart is the main physics body — make sure it's caught
-            local root = char:FindFirstChild("HumanoidRootPart")
-            if root then
-                root.CanCollide = false
-                pcall(function() root.CollisionGroup = NC_GROUP end)
+        end
+
+        noClipConn = RunService.Heartbeat:Connect(function(dt)
+            local char = LocalPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local hum  = char and char:FindFirstChildOfClass("Humanoid")
+            if not root or not hum then return end
+
+            -- Zero out collision every frame
+            freezeParts(char)
+
+            -- Suppress humanoid gravity / falling state
+            pcall(function()
+                hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+                hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,     false)
+                hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp,   false)
+            end)
+
+            -- Read movement input
+            local cam   = workspace.CurrentCamera
+            local fwd   = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+            local right = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
+            if fwd.Magnitude  > 0 then fwd   = fwd:Unit()   end
+            if right.Magnitude > 0 then right = right:Unit() end
+
+            local move = Vector3.new()
+            if UserInput:IsKeyDown(Enum.KeyCode.W) then move = move + fwd   end
+            if UserInput:IsKeyDown(Enum.KeyCode.S) then move = move - fwd   end
+            if UserInput:IsKeyDown(Enum.KeyCode.A) then move = move - right  end
+            if UserInput:IsKeyDown(Enum.KeyCode.D) then move = move + right  end
+            if UserInput:IsKeyDown(Enum.KeyCode.Space)       then move = move + Vector3.new(0, 1, 0) end
+            if UserInput:IsKeyDown(Enum.KeyCode.LeftControl) then move = move - Vector3.new(0, 1, 0) end
+
+            if move.Magnitude > 0 then
+                -- Direct CFrame write — physics engine can't block this
+                root.CFrame = root.CFrame + move.Unit * NC_SPEED * dt
             end
+
+            -- Kill all velocity so physics doesn't drift us back
+            pcall(function() root.AssemblyLinearVelocity  = Vector3.new() end)
+            pcall(function() root.AssemblyAngularVelocity = Vector3.new() end)
         end)
     else
         if noClipConn then
             noClipConn:Disconnect()
             noClipConn = nil
         end
-        -- Restore collision + original collision groups
+        -- Restore collision and humanoid states
         local char = LocalPlayer.Character
         if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                pcall(function()
+                    hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+                    hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,     true)
+                    hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp,   true)
+                end)
+            end
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
                     part.CanCollide = true
-                    local orig = _ncOrigGroups[part]
-                    if orig then
-                        pcall(function() part.CollisionGroup = orig end)
-                    end
                 end
             end
         end
-        _ncOrigGroups = {}
     end
 end
 
